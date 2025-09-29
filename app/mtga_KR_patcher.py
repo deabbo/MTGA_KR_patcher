@@ -244,7 +244,7 @@ def download_images(art_id_to_url, log_callback):
     return art_id_to_image_data
 
 def replace_card_art(art_id, image_content, log_callback):
-    asset_bundle_pattern = os.path.join(application_path, "..", "AssetBundle", f"{art_id}_CardArt_*")
+    asset_bundle_pattern = os.path.join(application_path, "..", "AssetBundle", f"{str(art_id).zfill(6)}_CardArt_*")
     found_files = glob.glob(asset_bundle_pattern)
     if not found_files:
         log_callback(f"  - 정보: ArtId {art_id}에 해당하는 에셋 번들을 찾을 수 없습니다. 건너뜁니다.")
@@ -259,11 +259,12 @@ def replace_card_art(art_id, image_content, log_callback):
         downloaded_image = Image.open(io.BytesIO(image_content))
         env = UnityPy.load(asset_path)
         
-        targets = [obj.read() for obj in env.objects if obj.type.name == "Texture2D" and obj.read().m_Name == f"{art_id}_AIF"]
+        padded_art_id = str(art_id).zfill(6)
+        targets = [obj.read() for obj in env.objects if obj.type.name == "Texture2D" and obj.read().m_Name == f"{padded_art_id}_AIF"]
         
         if not targets:
             texture_names = [obj.read().m_Name for obj in env.objects if obj.type.name == "Texture2D"]
-            log_callback(f"  - 정보: 에셋 번들 {os.path.basename(asset_path)}에서 '{art_id}_AIF' Texture2D를 찾을 수 없습니다. 사용 가능한 텍스쳐: {texture_names}. 건너뜁니다.")
+            log_callback(f"  - 정보: 에셋 번들 {os.path.basename(asset_path)}에서 '{padded_art_id}_AIF' Texture2D를 찾을 수 없습니다. 사용 가능한 텍스쳐: {texture_names}. 건너뜁니다.")
             return
 
         # log_callback(f"  - 정보: ArtId {art_id}에서 교체 대상 텍스쳐 {len(targets)}개를 찾았습니다. 모두 교체합니다.")
@@ -530,7 +531,7 @@ def run_image_change(log_callback, name_option):
             scryfall_missing_cards.append(card)
             continue
 
-        asset_bundle_pattern = os.path.join(application_path, "..", "AssetBundle", f"{art_id}_CardArt_*")
+        asset_bundle_pattern = os.path.join(application_path, "..", "AssetBundle", f"{str(art_id).zfill(6)}_CardArt_*")
         if glob.glob(asset_bundle_pattern):
             art_id_to_url[art_id] = card_info['image_uris']['art_crop']
         else:
