@@ -1,0 +1,54 @@
+name: Bump Version on Release Commit
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  bump-version:
+    # This job only runs if the commit message contains "release:"
+    if: "contains(github.event.head_commit.message, 'release:')"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # We need to fetch the history to be able to push back
+          fetch-depth: 0
+          # This token is provided by GitHub Actions
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Extract version and update files
+        id: extract_version
+        run: |
+          # Extract version from commit message (e.g., "release: 1.1" -> "1.1")
+          VERSION=$(echo "${{ github.event.head_commit.message }}" | grep -oP 'release: \K[0-9.]+')
+          if [ -z "$VERSION" ]; then
+            echo "Could not find version in commit message. Skipping."
+            exit 0
+          fi
+          echo "Found version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          # Update version.json using Python
+          python -c "import json; data = {'version': '$VERSION'}; f = open('version.json', 'w'); json.dump(data, f, indent=2); f.close()"
+
+          # Update mtga_KR_patcher.py using sed
+          sed -i "s/__version__ = \".*\"/__version__ = \"$VERSION\"/" app/mtga_KR_patcher.py
+
+      - name: Commit and push if changed
+        run: |
+          # Check if there are changes to commit
+          if ! git diff --quiet; then
+            git add version.json app/mtga_KR_patcher.py
+            git commit -m "chore(version): Bump version to ${{ steps.extract_version.outputs.version }} [skip ci]"
+            git push
+          else
+            echo "No version changes to commit."
+          fi

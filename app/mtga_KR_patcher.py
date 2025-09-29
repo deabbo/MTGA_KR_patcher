@@ -20,10 +20,9 @@ from PySide6.QtGui import QTextCursor
 
 # --- Auto-Update Logic ---
 __version__ = "1.0"
-# NOTE: Replace these URLs with your own raw file URLs (e.g., from a public GitHub repo or Gist)
-# Example version.json: { "version": "1.1" }
-VERSION_CHECK_URL = "https://YOUR_URL_HERE/version.json"
-SCRIPT_UPDATE_URL = "https://YOUR_URL_HERE/mtga_KR_patcher.py"
+# NOTE: These URLs point to the raw files in the main branch of the GitHub repository.
+VERSION_CHECK_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/version.json"
+SCRIPT_UPDATE_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/app/mtga_KR_patcher.py"
 
 def check_for_updates():
     """Checks for a new version of the script and prompts the user to update."""
