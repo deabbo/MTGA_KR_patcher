@@ -19,7 +19,7 @@ from PySide6.QtCore import QObject, Signal, QThread, QTimer
 from PySide6.QtGui import QTextCursor
 
 # --- Auto-Update Logic ---
-__version__ = "1.2"
+__version__ = "1.3"
 # NOTE: These URLs point to the raw files in the main branch of the GitHub repository.
 VERSION_CHECK_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/version.json"
 SCRIPT_UPDATE_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/app/mtga_KR_patcher.py"
@@ -494,6 +494,63 @@ def update_ability_text(log_callback, translation_data, only_english=False):
         if conn: conn.close()
 
 
+def run_english_name_patch(log_callback):
+    log_callback("=== 카드 이름 영문화 패치 시작 ===")
+    db_file_pattern = os.path.join(application_path, 'Raw_CardDatabase_*.mtga')
+    db_files = glob.glob(db_file_pattern)
+    if not db_files:
+        log_callback("  - 카드 데이터베이스 파일을 찾지 못해 건너뜁니다.")
+        return
+    db_path = db_files[0]
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # 1. Get all LocIds that are actual card titles from the Cards table.
+        log_callback("  - 카드 테이블에서 모든 타이틀 ID를 수집하는 중...")
+        cursor.execute("SELECT DISTINCT titleId FROM Cards WHERE titleId IS NOT NULL")
+        card_title_ids = {str(row[0]) for row in cursor.fetchall()}
+        
+        # Also consider InterchangeableTitleId as they are also card titles
+        cursor.execute("SELECT DISTINCT InterchangeableTitleId FROM Cards WHERE InterchangeableTitleId IS NOT NULL AND InterchangeableTitleId != 0")
+        for row in cursor.fetchall():
+            card_title_ids.add(str(row[0]))
+
+        if not card_title_ids:
+            log_callback("  - 카드 테이블에서 타이틀 ID를 찾을 수 없습니다.")
+            return
+        log_callback(f"  - {len(card_title_ids)}개의 고유한 카드 타이틀 ID를 찾았습니다.")
+
+        # 2. Get all English localizations.
+        log_callback("  - 영어 로컬라이제이션 데이터를 읽는 중...")
+        cursor.execute("SELECT LocId, Loc FROM Localizations_enUS")
+        all_en_locs = cursor.fetchall()
+
+        # 3. Filter the English localizations to only include card titles.
+        updates = []
+        for loc_id, loc_text in all_en_locs:
+            if str(loc_id) in card_title_ids:
+                updates.append((loc_text, str(loc_id)))
+        
+        if not updates:
+            log_callback("  - 업데이트할 카드 이름을 찾지 못했습니다.")
+            return
+
+        # 4. Execute the update.
+        log_callback(f"  - {len(updates)}개의 카드 이름을 영어로 덮어씁니다...")
+        cursor.executemany("UPDATE Localizations_koKR SET Loc = ? WHERE LocId = ?", updates)
+        conn.commit()
+        
+        log_callback(f"  - 총 {cursor.rowcount}개의 항목이 업데이트되었습니다.")
+        log_callback("=== 카드 이름 영문화 패치 완료 ===")
+
+    except sqlite3.Error as e:
+        log_callback(f"  - 카드 이름 영어로 변경 중 데이터베이스 오류 발생: {e}")
+    finally:
+        if conn: conn.close()
+
+
 def run_image_change(log_callback, name_option, script_base_path):
     log_callback("=== 실물 카드 패치 시작 ===")
     patch_spiderman_expansion_name(log_callback)
@@ -947,6 +1004,71 @@ def patch_seek_keyword(log_callback):
 
 # --- GUI Application using PySide6 ---
 
+def run_patch_removal(log_callback, script_base_path):
+    log_callback("=== 패치 제거 시작 ===")
+    
+    # 1. Remove patched asset bundles
+    patch_log_path = os.path.join(script_base_path, 'patch_log.json')
+    if os.path.exists(patch_log_path):
+        log_callback("  - patch_log.json을 기반으로 에셋 번들 제거 중...")
+        try:
+            with open(patch_log_path, 'r', encoding='utf-8') as f:
+                patch_log = json.load(f)
+            
+            patched_art_ids = patch_log.get('patched_images', {}).keys()
+            if patched_art_ids:
+                asset_bundle_path = os.path.join(application_path, "..", "AssetBundle")
+                removed_count = 0
+                for art_id in patched_art_ids:
+                    asset_pattern = os.path.join(asset_bundle_path, f"{str(art_id).zfill(6)}_CardArt_*")
+                    found_files = glob.glob(asset_pattern)
+                    for file_path in found_files:
+                        try:
+                            os.remove(file_path)
+                            log_callback(f"    - 삭제됨: {os.path.basename(file_path)}")
+                            removed_count += 1
+                        except OSError as e:
+                            log_callback(f"    - 오류: {os.path.basename(file_path)} 삭제 실패: {e}")
+                log_callback(f"  - 총 {removed_count}개의 에셋 번들 파일을 삭제했습니다.")
+            else:
+                log_callback("  - 제거할 에셋 번들 로그가 없습니다.")
+
+            # Remove the log file itself
+            try:
+                os.remove(patch_log_path)
+                log_callback("  - patch_log.json 파일을 삭제했습니다.")
+            except OSError as e:
+                log_callback(f"  - 오류: patch_log.json 삭제 실패: {e}")
+
+        except (json.JSONDecodeError, IOError) as e:
+            log_callback(f"  - 오류: patch_log.json 읽기 실패: {e}")
+    else:
+        log_callback("  - patch_log.json을 찾을 수 없어 에셋 번들 제거를 건너뜁니다.")
+
+    # 2. Remove database files
+    log_callback("  - 데이터베이스 파일 제거 중...")
+    files_to_remove = []
+    db_pattern = os.path.join(application_path, 'Raw_CardDatabase_*.mtga')
+    client_pattern = os.path.join(application_path, 'Raw_ClientLocalization_*.mtga')
+    files_to_remove.extend(glob.glob(db_pattern))
+    files_to_remove.extend(glob.glob(client_pattern))
+
+    if files_to_remove:
+        removed_db_count = 0
+        for file_path in files_to_remove:
+            try:
+                os.remove(file_path)
+                log_callback(f"    - 삭제됨: {os.path.basename(file_path)}")
+                removed_db_count += 1
+            except OSError as e:
+                log_callback(f"    - 오류: {os.path.basename(file_path)} 삭제 실패: {e}")
+        log_callback(f"  - 총 {removed_db_count}개의 데이터베이스 파일을 삭제했습니다.")
+    else:
+        log_callback("  - 제거할 데이터베이스 파일을 찾지 못했습니다.")
+    
+    log_callback("패치 제거가 완료되었습니다. 게임을 재시작하여 파일을 복구하세요.")
+
+
 class PatchWorker(QObject):
     log = Signal(str, bool)
     finished = Signal()
@@ -970,11 +1092,20 @@ class PatchWorker(QObject):
                 self.finished.emit()
                 return
 
+            if self.patch_options['remove_patch']:
+                run_patch_removal(log_callback, script_base_path)
+                log_callback("*** 패치 제거가 완료되었습니다. ***")
+                self.finished.emit()
+                return
+
             if self.patch_options['mistranslation']:
                 run_localization_patch(log_callback)
             
             if self.patch_options['images']:
                 run_image_change(log_callback, self.patch_options['name_option'], script_base_path)
+
+            if self.patch_options['english_names_only']:
+                run_english_name_patch(log_callback)
             
             log_callback("*** 모든 작업이 완료되었습니다. ***")
 
@@ -996,6 +1127,8 @@ class PatcherWindow(QWidget):
         self.mistranslation_check.setChecked(True)
 
         self.image_check = QCheckBox("실물 카드로 변경 (SPM 등)")
+        self.english_names_only_check = QCheckBox("카드이름만 영어로(고인물용)")
+        self.remove_patch_check = QCheckBox("패치 제거")
 
         self.art_only_radio = QRadioButton("일러스트만 변경")
         self.art_only_radio.setChecked(True)
@@ -1013,6 +1146,8 @@ class PatcherWindow(QWidget):
         options_layout = QHBoxLayout()
         options_layout.addWidget(self.mistranslation_check)
         options_layout.addWidget(self.image_check)
+        options_layout.addWidget(self.english_names_only_check)
+        options_layout.addWidget(self.remove_patch_check)
         options_group.setLayout(options_layout)
 
         name_group = QGroupBox("카드 이름 변경")
@@ -1036,6 +1171,8 @@ class PatcherWindow(QWidget):
         # --- Connections ---
         self.mistranslation_check.stateChanged.connect(self.update_ui_state)
         self.image_check.stateChanged.connect(self.update_ui_state)
+        self.english_names_only_check.stateChanged.connect(self.update_ui_state)
+        self.remove_patch_check.stateChanged.connect(self.update_ui_state)
         self.image_check.stateChanged.connect(self.show_image_warning)
         self.run_button.clicked.connect(self.start_patch)
 
@@ -1043,20 +1180,49 @@ class PatcherWindow(QWidget):
         self.update_ui_state()
 
     def update_ui_state(self):
+        is_remove = self.remove_patch_check.isChecked()
+
+        if is_remove:
+            # '패치 제거'가 선택되면 다른 모든 옵션을 비활성화
+            self.mistranslation_check.setChecked(False)
+            self.image_check.setChecked(False)
+            self.english_names_only_check.setChecked(False)
+
+            self.mistranslation_check.setEnabled(False)
+            self.image_check.setEnabled(False)
+            self.english_names_only_check.setEnabled(False)
+            self.name_group.setEnabled(False)
+            
+            self.run_button.setEnabled(True)
+            self.run_button.setText("패치 제거 시작")
+            return
+
+        # '패치 제거'가 선택되지 않은 경우, 다른 옵션들을 다시 활성화
+        self.mistranslation_check.setEnabled(True)
+        self.image_check.setEnabled(True)
+        self.english_names_only_check.setEnabled(True)
+
         is_mistranslation = self.mistranslation_check.isChecked()
         is_images = self.image_check.isChecked()
+        is_english_only = self.english_names_only_check.isChecked()
 
+        # The name_group (radio buttons) should only be enabled if '실물 카드로 변경' (is_images) is checked.
+        # The '카드이름만 영어로' (is_english_only) option does not affect the enabled state of this group.
         self.name_group.setEnabled(is_images)
 
-        can_run = is_mistranslation or is_images
+        can_run = is_mistranslation or is_images or is_english_only
         self.run_button.setEnabled(can_run)
 
-        if is_mistranslation and is_images:
-            self.run_button.setText("실물카드 및 오역 패치 시작")
-        elif is_mistranslation:
-            self.run_button.setText("오역 패치 시작")
-        elif is_images:
-            self.run_button.setText("실물카드로 패치 시작")
+        texts = []
+        if is_images:
+            texts.append("실물카드")
+        if is_mistranslation:
+            texts.append("오역")
+        if is_english_only:
+            texts.append("영문 이름")
+
+        if texts:
+            self.run_button.setText(f"{' & '.join(texts)} 패치 시작")
         else:
             self.run_button.setText("옵션을 선택하세요")
 
@@ -1072,6 +1238,8 @@ class PatcherWindow(QWidget):
         patch_options = {
             'mistranslation': self.mistranslation_check.isChecked(),
             'images': self.image_check.isChecked(),
+            'english_names_only': self.english_names_only_check.isChecked(),
+            'remove_patch': self.remove_patch_check.isChecked(),
             'name_option': 'art_only'
         }
         if self.real_english_radio.isChecked():
