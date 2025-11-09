@@ -19,7 +19,7 @@ from PySide6.QtCore import QObject, Signal, QThread, QTimer
 from PySide6.QtGui import QTextCursor
 
 # --- Auto-Update Logic ---
-__version__ = "1.1"
+__version__ = "1.2"
 # NOTE: These URLs point to the raw files in the main branch of the GitHub repository.
 VERSION_CHECK_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/version.json"
 SCRIPT_UPDATE_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/app/mtga_KR_patcher.py"
@@ -248,7 +248,7 @@ def replace_card_art(art_id, image_content, log_callback):
     found_files = glob.glob(asset_bundle_pattern)
     if not found_files:
         log_callback(f"  - 정보: ArtId {art_id}에 해당하는 에셋 번들을 찾을 수 없습니다. 건너뜁니다.")
-        return
+        return False
 
     if len(found_files) > 1:
         # log_callback(f"  - 경고: ArtId {art_id}에 대해 여러 에셋 번들이 발견되었습니다. 첫 번째 파일({os.path.basename(found_files[0])})을 사용합니다.")
@@ -265,20 +265,20 @@ def replace_card_art(art_id, image_content, log_callback):
         if not targets:
             texture_names = [obj.read().m_Name for obj in env.objects if obj.type.name == "Texture2D"]
             log_callback(f"  - 정보: 에셋 번들 {os.path.basename(asset_path)}에서 '{padded_art_id}_AIF' Texture2D를 찾을 수 없습니다. 사용 가능한 텍스쳐: {texture_names}. 건너뜁니다.")
-            return
+            return False
 
-        # log_callback(f"  - 정보: ArtId {art_id}에서 교체 대상 텍스쳐 {len(targets)}개를 찾았습니다. 모두 교체합니다.")
-        
-        # 사용자 요청: 다운로드한 이미지를 어떠한 변형도 없이 그대로 적용
         for target_obj in targets:
             target_obj.image = downloaded_image
             target_obj.save()
             
         with open(asset_path, "wb") as f:
             f.write(env.file.save())
+        
+        return True
             
     except Exception as e:
         log_callback(f"  - 오류: ArtId {art_id} ({os.path.basename(asset_path)}) 작업 중 에러 발생: {e}")
+        return False
 
 def update_card_names(log_callback, name_option):
     if name_option == "art_only": return
@@ -485,8 +485,8 @@ def update_ability_text(log_callback, translation_data, only_english=False):
                         work_text = work_text.replace(placeholder, original_word)
 
                     if work_text != loc_text: all_updates_ko.append((work_text, loc_id, formatted))
-        if all_updates_en: cursor.executemany("UPDATE Localizations_enUS SET Loc = ? WHERE LocId = ?", all_updates_en); log_callback(f"")
-        if not only_english and all_updates_ko: cursor.executemany("UPDATE Localizations_koKR SET Loc = ? WHERE LocId = ? AND Formatted = ?", all_updates_ko); log_callback(f"")
+        if all_updates_en: cursor.executemany("UPDATE Localizations_enUS SET Loc = ? WHERE LocId = ?", all_updates_en)
+        if not only_english and all_updates_ko: cursor.executemany("UPDATE Localizations_koKR SET Loc = ? WHERE LocId = ? AND Formatted = ?", all_updates_ko)
         conn.commit()
     except Exception as e:
         log_callback(f"  - 능력 텍스트 변경 중 오류 발생: {e}")
@@ -494,8 +494,7 @@ def update_ability_text(log_callback, translation_data, only_english=False):
         if conn: conn.close()
 
 
-
-def run_image_change(log_callback, name_option):
+def run_image_change(log_callback, name_option, script_base_path):
     log_callback("=== 실물 카드 패치 시작 ===")
     patch_spiderman_expansion_name(log_callback)
     patch_soul_stone_card(log_callback)
@@ -504,12 +503,26 @@ def run_image_change(log_callback, name_option):
     if not target_cards: 
         log_callback("이미지 교체 대상 카드가 없습니다.")
         return
+
+    patch_log_path = os.path.join(script_base_path, 'patch_log.json')
+    patch_log = {}
+    if os.path.exists(patch_log_path):
+        try:
+            with open(patch_log_path, 'r', encoding='utf-8') as f:
+                patch_log = json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            log_callback(f"  - 경고: patch_log.json 파일을 읽는 중 오류 발생: {e}. 로그를 새로 시작합니다.")
+            patch_log = {}
+    
+    if 'patched_images' not in patch_log:
+        patch_log['patched_images'] = {}
+
     unique_expansion_codes = set(card['ExpansionCode'] for card in target_cards)
     scryfall_data = fetch_all_sets_data(unique_expansion_codes, log_callback)
     
     art_id_to_url, scryfall_missing_cards, asset_missing_cards = {}, [], []
     
-    # log_callback("--- Scryfall에서 카드 정보 조회 및 에셋 존재 여부 확인 ---")
+    log_callback("--- Scryfall에서 카드 정보 조회 및 패치 여부 확인 ---")
     for card in target_cards:
         art_id, exp_code = card['ArtId'], card['ExpansionCode']
         title_name = card.get('titleName')
@@ -531,9 +544,13 @@ def run_image_change(log_callback, name_option):
             scryfall_missing_cards.append(card)
             continue
 
+        url = card_info['image_uris']['art_crop']
+        if str(art_id) in patch_log['patched_images'] and patch_log['patched_images'][str(art_id)] == url:
+            continue
+
         asset_bundle_pattern = os.path.join(application_path, "..", "AssetBundle", f"{str(art_id).zfill(6)}_CardArt_*")
         if glob.glob(asset_bundle_pattern):
-            art_id_to_url[art_id] = card_info['image_uris']['art_crop']
+            art_id_to_url[art_id] = url
         else:
             asset_missing_cards.append(card)
 
@@ -542,11 +559,25 @@ def run_image_change(log_callback, name_option):
         if downloaded_images:
             log_callback("--- 다운로드된 이미지를 에셋에 적용 시작 ---")
             total = len(downloaded_images)
+            patched_count = 0
             for i, (art_id, image_data) in enumerate(downloaded_images.items()):
                 log_callback(f"  에셋 적용: ({i + 1}/{total})", update_last_line=True)
-                replace_card_art(art_id, image_data, log_callback)
-            log_callback("에셋 적용 완료.")
+                success = replace_card_art(art_id, image_data, log_callback)
+                if success:
+                    patched_count += 1
+                    patch_log['patched_images'][str(art_id)] = art_id_to_url[art_id]
+            
+            log_callback(f"에셋 적용 완료. ({patched_count}개 적용됨)")
             log_callback("=== 커스텀 일러스트 패치 완료 ===")
+            
+            try:
+                with open(patch_log_path, 'w', encoding='utf-8') as f:
+                    json.dump(patch_log, f, indent=2, ensure_ascii=False)
+            except IOError as e:
+                log_callback(f"  - 경고: patch_log.json 파일에 쓰는 중 오류 발생: {e}")
+    else:
+        log_callback("새롭게 교체할 이미지가 없거나 이미 처리되었습니다.")
+
     update_card_names(log_callback, name_option)
 
 def fetch_json_from_url(url, log_callback):
@@ -651,8 +682,8 @@ def patch_spiderman_expansion_name(log_callback):
                 if en_text != original_en: en_updates.append((en_text, key))
                 if ko_text != original_ko: ko_updates.append((ko_text, key))
 
-            if en_updates: cursor.executemany("UPDATE Loc SET enUS = ? WHERE key = ?", en_updates); log_callback(f"")
-            if ko_updates: cursor.executemany("UPDATE Loc SET koKR = ? WHERE key = ?", ko_updates); log_callback(f"")
+            if en_updates: cursor.executemany("UPDATE Loc SET enUS = ? WHERE key = ?", en_updates)
+            if ko_updates: cursor.executemany("UPDATE Loc SET koKR = ? WHERE key = ?", ko_updates)
             if en_updates or ko_updates:
                 conn.commit()
                 # log_callback(f"  - {os.path.basename(client_file)} 파일에 변경사항을 저장했습니다.")
@@ -687,9 +718,7 @@ def patch_soul_stone_card(log_callback):
             
             conn.commit()
             
-            if en_changes > 0 or ko_changes > 0:
-                log_callback(f"")
-            else:
+            if en_changes == 0 and ko_changes == 0:
                 log_callback("    - 카드 데이터베이스에서 LocId 1072918에 해당하는 수정 대상을 찾지 못했습니다.")
 
         except sqlite3.Error as e:
@@ -763,6 +792,9 @@ def run_localization_patch(log_callback):
                         
                         card_cursor.execute("SELECT Formatted FROM Localizations_koKR WHERE LocId = ?", (search_value,))
                         rows = card_cursor.fetchall()
+
+                        if not rows:
+                            continue
                         
                         for row in rows:
                             formatted_value = row[0]
@@ -781,8 +813,137 @@ def run_localization_patch(log_callback):
                 log_callback(f"    - 에러 발생: {e}")
             finally:
                 if 'card_conn' in locals() and card_conn: card_conn.close()
-            
+    
+    patch_seek_keyword(log_callback)
     log_callback("=== 한글 오역 패치 완료 ===")
+
+def patch_seek_keyword(log_callback):
+    log_callback("  - 'SEEK' 키워드 자동 번역 패치 시작...")
+    db_files = glob.glob(os.path.join(application_path, 'Raw_CardDatabase_*.mtga'))
+    if not db_files:
+        log_callback("    - 카드 데이터베이스를 찾을 수 없어 건너뜁니다.")
+        return
+
+    db_path = db_files[0]
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # Step 1: Get all LocIds for abilities of cards in 'Y' expansions.
+        cursor.execute("SELECT AbilityIds, HiddenAbilityIds FROM Cards WHERE ExpansionCode LIKE 'Y%'")
+        rows = cursor.fetchall()
+        
+        all_ability_ids = set()
+        direct_loc_ids = set()
+
+        for ability_ids_str, hidden_ability_ids_str in rows:
+            for id_part in ((ability_ids_str or '') + ',' + (hidden_ability_ids_str or '')).split(','):
+                id_part = id_part.strip()
+                if not id_part: continue
+                if ':' in id_part:
+                    direct_loc_ids.add(id_part.split(':', 1)[1].strip())
+                else:
+                    all_ability_ids.add(id_part)
+        
+        if all_ability_ids:
+            placeholders = ', '.join('?' * len(all_ability_ids))
+            cursor.execute(f"SELECT DISTINCT TextId FROM Abilities WHERE Id IN ({placeholders}) AND TextId != 0", list(all_ability_ids))
+            for r in cursor.fetchall():
+                direct_loc_ids.add(str(r[0]))
+
+        if not direct_loc_ids:
+            log_callback("    - 'Y' 확장팩에서 처리할 능력 텍스트를 찾지 못했습니다.")
+            return
+
+        # Step 2: Get English texts for all candidate LocIds to determine which ones to process
+        placeholders = ', '.join('?' * len(direct_loc_ids))
+        cursor.execute(f"SELECT LocId, Loc FROM Localizations_enUS WHERE LocId IN ({placeholders}) AND (Loc LIKE '%SEEK%' OR Loc LIKE '%Discover%')", list(direct_loc_ids))
+        
+        en_texts_to_process = {str(loc_id): loc_text for loc_id, loc_text in cursor.fetchall()}
+        
+        # Filter for LocIds that actually contain SEEK
+        loc_ids_with_seek = {loc_id for loc_id, en_text in en_texts_to_process.items() if "SEEK" in en_text}
+
+        if not loc_ids_with_seek:
+            log_callback("    - 'SEEK' 오역이 처리되었거나 없습니다.")
+            return
+
+        # Step 3: For the LocIds that need changes, fetch ALL their Korean localizations.
+        placeholders_ko = ', '.join('?' * len(loc_ids_with_seek))
+        cursor.execute(f"SELECT LocId, Loc, Formatted FROM Localizations_koKR WHERE LocId IN ({placeholders_ko})", list(loc_ids_with_seek))
+        
+        ko_texts_to_process = cursor.fetchall()
+        updates_ko = []
+        
+        for loc_id, ko_text, formatted in ko_texts_to_process:
+            loc_id_str = str(loc_id)
+            en_text = en_texts_to_process.get(loc_id_str)
+            if not en_text: continue
+
+            # --- Idempotent Logic Starts Here ---
+            
+            # 1. Determine target state from English text
+            target_discover_count = en_text.count("Discover")
+            target_seek_count = en_text.count("SEEK")
+
+            if target_seek_count == 0:
+                continue
+
+            # 2. Determine current state from Korean text
+            current_discover_count = ko_text.count('발견')
+            current_seek_count = ko_text.count('탐색')
+
+            # 3. Idempotency Check: If the text is already in the correct state, skip.
+            if current_discover_count == target_discover_count and current_seek_count == target_seek_count:
+                continue
+
+            # 4. Revert to a predictable "untouched" state for processing
+            ko_reverted = ko_text.replace('탐색', '발견')
+
+            new_ko_text = ko_reverted
+
+            # 5. Apply the transformation logic from the reverted state
+            if target_discover_count > 0 and target_seek_count > 0:
+                discover_pos = en_text.find("Discover")
+                seek_pos = en_text.find("SEEK")
+                
+                expected_발견_count = target_discover_count + target_seek_count
+                if ko_reverted.count('발견') < expected_발견_count:
+                    continue
+
+                if discover_pos < seek_pos:
+                    # Order: Discover, then SEEK.
+                    # Replace the Nth '발견' that corresponds to SEEK.
+                    nth_occurrence = target_discover_count
+                    
+                    matches = list(re.finditer('발견', ko_reverted))
+                    if len(matches) > nth_occurrence:
+                        match_to_replace = matches[nth_occurrence]
+                        start_pos = match_to_replace.start()
+                        new_ko_text = ko_reverted[:start_pos] + '탐색' + ko_reverted[start_pos + len('발견'):]
+                    else:
+                         continue
+                else: # seek_pos < discover_pos
+                    # Order: SEEK, then Discover. Replace the first N '발견's with '탐색'.
+                    new_ko_text = ko_reverted.replace('발견', '탐색', target_seek_count)
+            elif target_seek_count > 0:
+                new_ko_text = ko_reverted.replace('발견', '탐색')
+            
+            if new_ko_text != ko_text:
+                final_text = formatting_for_2(new_ko_text) if formatted == 2 else new_ko_text
+                updates_ko.append((final_text, loc_id, formatted))
+        
+        if updates_ko:
+            cursor.executemany("UPDATE Localizations_koKR SET Loc = ? WHERE LocId = ? AND Formatted = ?", updates_ko)
+            conn.commit()
+
+        log_callback(f"  - 총 {len(updates_ko)}개 레코드에서 'SEEK'를 '탐색'으로 변경했습니다.")
+
+    except sqlite3.Error as e:
+        log_callback(f"    - 'SEEK' 패치 중 데이터베이스 오류 발생: {e}")
+    finally:
+        if conn: conn.close()
 
 # --- GUI Application using PySide6 ---
 
@@ -799,6 +960,11 @@ class PatchWorker(QObject):
             self.log.emit(message, update_last_line)
         
         try:
+            if getattr(sys, 'frozen', False):
+                script_base_path = os.path.dirname(sys.executable)
+            else:
+                script_base_path = os.path.dirname(os.path.abspath(__file__))
+
             if not find_and_set_mtga_path(log_callback):
                 log_callback("*** 필수 파일 경로를 찾지 못해 패치를 중단합니다. ***")
                 self.finished.emit()
@@ -808,7 +974,7 @@ class PatchWorker(QObject):
                 run_localization_patch(log_callback)
             
             if self.patch_options['images']:
-                run_image_change(log_callback, self.patch_options['name_option'])
+                run_image_change(log_callback, self.patch_options['name_option'], script_base_path)
             
             log_callback("*** 모든 작업이 완료되었습니다. ***")
 
