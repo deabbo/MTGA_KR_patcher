@@ -19,7 +19,7 @@ from PySide6.QtCore import QObject, Signal, QThread, QTimer
 from PySide6.QtGui import QTextCursor
 
 # --- Auto-Update Logic ---
-__version__ = "1.3"
+__version__ = "1.4"
 # NOTE: These URLs point to the raw files in the main branch of the GitHub repository.
 VERSION_CHECK_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/version.json"
 SCRIPT_UPDATE_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/app/mtga_KR_patcher.py"
@@ -507,42 +507,59 @@ def run_english_name_patch(log_callback):
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
 
-        # 1. Get all LocIds that are actual card titles from the Cards table.
-        log_callback("  - 카드 테이블에서 모든 타이틀 ID를 수집하는 중...")
-        cursor.execute("SELECT DISTINCT titleId FROM Cards WHERE titleId IS NOT NULL")
+        # 1. Get all LocIds that are purely card titles from the Cards table's titleId column, excluding tokens.
+        log_callback("  - 카드 테이블에서 순수 카드 제목 ID를 수집하는 중 (토큰 제외)...")
+        cursor.execute("SELECT DISTINCT titleId FROM Cards WHERE titleId IS NOT NULL AND isToken = 0")
         card_title_ids = {str(row[0]) for row in cursor.fetchall()}
         
-        # Also consider InterchangeableTitleId as they are also card titles
-        cursor.execute("SELECT DISTINCT InterchangeableTitleId FROM Cards WHERE InterchangeableTitleId IS NOT NULL AND InterchangeableTitleId != 0")
-        for row in cursor.fetchall():
-            card_title_ids.add(str(row[0]))
-
         if not card_title_ids:
             log_callback("  - 카드 테이블에서 타이틀 ID를 찾을 수 없습니다.")
             return
         log_callback(f"  - {len(card_title_ids)}개의 고유한 카드 타이틀 ID를 찾았습니다.")
 
-        # 2. Get all English localizations.
+        # 2. Get English localizations for only the collected card title IDs.
         log_callback("  - 영어 로컬라이제이션 데이터를 읽는 중...")
-        cursor.execute("SELECT LocId, Loc FROM Localizations_enUS")
-        all_en_locs = cursor.fetchall()
-
-        # 3. Filter the English localizations to only include card titles.
+        placeholders = ', '.join('?' * len(card_title_ids))
+        cursor.execute(f"SELECT LocId, Loc FROM Localizations_enUS WHERE LocId IN ({placeholders})", list(card_title_ids))
+        
         updates = []
-        for loc_id, loc_text in all_en_locs:
-            if str(loc_id) in card_title_ids:
-                updates.append((loc_text, str(loc_id)))
+        for loc_id, loc_text in cursor.fetchall():
+            updates.append((loc_text, str(loc_id)))
         
         if not updates:
             log_callback("  - 업데이트할 카드 이름을 찾지 못했습니다.")
             return
 
-        # 4. Execute the update.
+        # 3. Execute the update on the Korean localization table, with special handling for "A-" cards.
         log_callback(f"  - {len(updates)}개의 카드 이름을 영어로 덮어씁니다...")
-        cursor.executemany("UPDATE Localizations_koKR SET Loc = ? WHERE LocId = ?", updates)
+        
+        a_minus_sprite_tag = '<sprite="SpriteSheet_MiscIcons" name="arena_a">'
+        total_updated_rows = 0
+        a_minus_cards_count = 0
+
+        for loc_text, loc_id in updates:
+            # First, update all formatted versions for this LocId with the English name.
+            cursor.execute("UPDATE Localizations_koKR SET Loc = ? WHERE LocId = ?", (loc_text, loc_id))
+            total_updated_rows += cursor.rowcount
+
+            # If the name starts with "A-", replace the prefix with a sprite for Formatted = 1.
+            if loc_text.startswith("A-"):
+                a_minus_cards_count += 1
+                
+                # Replace only the "A-" prefix with the sprite tag.
+                new_loc_text = a_minus_sprite_tag + loc_text[2:]
+                
+                # This is a specific override for a single formatted version.
+                cursor.execute(
+                    "UPDATE Localizations_koKR SET Loc = ? WHERE LocId = ? AND Formatted = 1",
+                    (new_loc_text, loc_id)
+                )
+
         conn.commit()
         
-        log_callback(f"  - 총 {cursor.rowcount}개의 항목이 업데이트되었습니다.")
+        log_callback(f"  - 총 {total_updated_rows}개 항목이 업데이트되었습니다.")
+        if a_minus_cards_count > 0:
+            log_callback(f"  - 그 중 {a_minus_cards_count}개의 'A-' 카드를 특별 아이콘으로 처리했습니다.")
         log_callback("=== 카드 이름 영문화 패치 완료 ===")
 
     except sqlite3.Error as e:
@@ -568,9 +585,8 @@ def replace_sleeve_art(sleeve_bucket_id, image_content, log_callback):
     try:
         downloaded_image = Image.open(io.BytesIO(image_content))
         
-        # Add 35px black letterbox
-        border_size = 35
-        downloaded_image = ImageOps.expand(downloaded_image, border=border_size, fill='black')
+        # Add letterbox (left, top, right, bottom)
+        downloaded_image = ImageOps.expand(downloaded_image, border=(55, 30, 55, 30), fill='#171717')
 
         env = UnityPy.load(asset_path)
         
@@ -652,7 +668,6 @@ def update_sleeve_names(log_callback, sleeve_data, translation_data):
 def run_image_change(log_callback, name_option, script_base_path):
     log_callback("=== 실물 카드 패치 시작 ===")
     patch_spiderman_expansion_name(log_callback)
-    patch_soul_stone_card(log_callback)
     
     setup_unitypy()
 
@@ -682,59 +697,77 @@ def run_image_change(log_callback, name_option, script_base_path):
     }
 
     # --- Collect all art_ids for both cards and sleeves ---
-    all_art_ids_to_fetch_url = {} # art_id -> {"name": card_name, "exp_code": exp_code, "is_sleeve": bool}
+    art_id_metadata = {} # art_id -> {"name": ..., "exp_code": ..., "patch_as_card": bool, "patch_as_sleeve": bool}
     all_expansion_codes = set()
 
-    # For regular cards
+    # Process all cards from DB
     for card in target_cards:
-        art_id, exp_code = str(card['ArtId']), card['ExpansionCode']
-        title_name = card.get('titleName')
-        interchange_name = card.get('interchangeName')
-        card_name = interchange_name or title_name
-        if card_name:
-            all_art_ids_to_fetch_url[art_id] = {"name": card_name, "exp_code": exp_code, "is_sleeve": False}
-            all_expansion_codes.add(exp_code)
-
-    # For sleeves
-    sleeve_art_id_to_name = {}
-    for card in target_cards: # Re-use target_cards to get sleeve names
         art_id = str(card['ArtId'])
+        exp_code = card['ExpansionCode']
+        card_name = card.get('interchangeName') or card.get('titleName')
+        if not card_name:
+            continue
+
+        # Initialize metadata for this art_id if not present
+        if art_id not in art_id_metadata:
+            art_id_metadata[art_id] = {
+                "name": card_name,
+                "exp_code": exp_code,
+                "patch_as_card": False,
+                "patch_as_sleeve": False
+            }
+        
+        # All cards in target_cards are candidates for card art patching
+        art_id_metadata[art_id]["patch_as_card"] = True
+        all_expansion_codes.add(exp_code)
+
+        # If this art_id is also for a sleeve, mark it
         if art_id in sleeve_data_map:
-            card_name = card.get('interchangeName') or card.get('titleName')
-            if card_name:
-                sleeve_art_id_to_name[art_id] = card_name
-                all_art_ids_to_fetch_url[art_id] = {"name": card_name, "exp_code": sleeve_data_map[art_id]['exp_code'], "is_sleeve": True}
-                all_expansion_codes.add(sleeve_data_map[art_id]['exp_code'])
+            art_id_metadata[art_id]["patch_as_sleeve"] = True
+            # The sleeve's Scryfall search might need a different expansion code
+            sleeve_exp_code = sleeve_data_map[art_id]['exp_code']
+            art_id_metadata[art_id]["exp_code"] = sleeve_exp_code
+            all_expansion_codes.add(sleeve_exp_code)
 
     # --- Fetch Scryfall data once for all ---
     scryfall_data = fetch_all_sets_data(all_expansion_codes, log_callback)
 
     # --- Determine URLs for all art_ids that need patching ---
     art_ids_to_download = {} # art_id -> url
-    for art_id, card_info_dict in all_art_ids_to_fetch_url.items():
-        card_name = card_info_dict["name"]
-        exp_code = card_info_dict["exp_code"]
-        is_sleeve = card_info_dict["is_sleeve"]
-
+    for art_id, meta in art_id_metadata.items():
+        card_name = meta["name"]
+        exp_code = meta["exp_code"]
+        
         normalized_name = normalize_name(card_name)
         card_info = scryfall_data.get(exp_code, {}).get(normalized_name)
+        
         if card_info and 'image_uris' in card_info and 'art_crop' in card_info['image_uris']:
             url = card_info['image_uris']['art_crop']
             
-            log_key = f"sleeve_{art_id}" if is_sleeve else str(art_id)
-            log_entry = patch_log.get('patched_images', {}).get(log_key)
-            
-            is_patched_with_same_url = False
-            if log_entry:
-                if is_sleeve and isinstance(log_entry, dict) and log_entry.get('url') == url:
-                    is_patched_with_same_url = True
-                elif not is_sleeve and log_entry == url: # Old format for cards
-                    is_patched_with_same_url = True
+            # Check log for card
+            is_card_patched = False
+            if meta["patch_as_card"]:
+                log_key_card = str(art_id)
+                if patch_log.get('patched_images', {}).get(log_key_card) == url:
+                    is_card_patched = True
 
-            if not is_patched_with_same_url:
+            # Check log for sleeve
+            is_sleeve_patched = False
+            if meta["patch_as_sleeve"]:
+                log_key_sleeve = f"sleeve_{art_id}"
+                log_entry = patch_log.get('patched_images', {}).get(log_key_sleeve)
+                if isinstance(log_entry, dict) and log_entry.get('url') == url:
+                    is_sleeve_patched = True
+            
+            # If it needs to be patched as either a card or a sleeve, and that specific patch isn't done, download it.
+            should_download = False
+            if meta["patch_as_card"] and not is_card_patched:
+                should_download = True
+            if meta["patch_as_sleeve"] and not is_sleeve_patched:
+                should_download = True
+
+            if should_download:
                 art_ids_to_download[art_id] = url
-        else:
-            log_callback(f"  - 정보: Scryfall에서 ArtId {art_id} ({card_name})의 이미지를 찾지 못했습니다.")
 
     # --- Download all images once ---
     downloaded_images = {}
@@ -747,21 +780,22 @@ def run_image_change(log_callback, name_option, script_base_path):
     log_callback("=== 카드 슬리브 교체 시작 ===")
     if downloaded_images:
         patched_sleeve_count = 0
-        total_sleeves_to_patch = len([art_id for art_id in sleeve_data_map if art_id in downloaded_images])
+        sleeves_to_patch = [art_id for art_id, meta in art_id_metadata.items() if meta["patch_as_sleeve"] and art_id in downloaded_images]
+        total_sleeves_to_patch = len(sleeves_to_patch)
         current_sleeve_patch_count = 0
-        for art_id, data in sleeve_data_map.items():
-            if art_id in downloaded_images:
-                current_sleeve_patch_count += 1
-                log_callback(f"  슬리브 에셋 적용: ({current_sleeve_patch_count}/{total_sleeves_to_patch})", update_last_line=True)
-                
-                bucket_id = data['bucket_id']
-                image_data = downloaded_images[art_id]
-                success = replace_sleeve_art(bucket_id, image_data, log_callback)
-                if success:
-                    patched_sleeve_count += 1
-                    sleeve_log_key = f"sleeve_{art_id}"
-                    if 'patched_images' not in patch_log: patch_log['patched_images'] = {}
-                    patch_log['patched_images'][sleeve_log_key] = {"url": art_ids_to_download[art_id], "bucket_id": bucket_id}
+
+        for art_id in sleeves_to_patch:
+            current_sleeve_patch_count += 1
+            log_callback(f"  슬리브 에셋 적용: ({current_sleeve_patch_count}/{total_sleeves_to_patch})", update_last_line=True)
+            
+            bucket_id = sleeve_data_map[art_id]['bucket_id']
+            image_data = downloaded_images[art_id]
+            success = replace_sleeve_art(bucket_id, image_data, log_callback)
+            if success:
+                patched_sleeve_count += 1
+                sleeve_log_key = f"sleeve_{art_id}"
+                if 'patched_images' not in patch_log: patch_log['patched_images'] = {}
+                patch_log['patched_images'][sleeve_log_key] = {"url": art_ids_to_download[art_id], "bucket_id": bucket_id}
         log_callback(f"  슬리브 에셋 적용 완료. ({patched_sleeve_count}개 적용됨)")
     else:
         log_callback("새롭게 교체할 슬리브 이미지가 없거나 이미 처리되었습니다.")
@@ -770,14 +804,15 @@ def run_image_change(log_callback, name_option, script_base_path):
     log_callback("=== 일러스트 교체 시작 ===")
     if downloaded_images:
         patched_card_count = 0
-        total_cards_to_patch = len([art_id for art_id in all_art_ids_to_fetch_url if not all_art_ids_to_fetch_url[art_id]["is_sleeve"] and art_id in downloaded_images])
+        cards_to_patch = [art_id for art_id, meta in art_id_metadata.items() if meta["patch_as_card"] and art_id in downloaded_images]
+        total_cards_to_patch = len(cards_to_patch)
         current_card_patch_count = 0
-        for art_id, image_data in downloaded_images.items():
-            if all_art_ids_to_fetch_url.get(art_id, {}).get("is_sleeve"): # Skip sleeves
-                continue
 
+        for art_id in cards_to_patch:
             current_card_patch_count += 1
             log_callback(f"  에셋 적용: ({current_card_patch_count}/{total_cards_to_patch})", update_last_line=True)
+            
+            image_data = downloaded_images[art_id]
             success = replace_card_art(int(art_id), image_data, log_callback)
             if success:
                 patched_card_count += 1
@@ -855,6 +890,10 @@ def patch_spiderman_expansion_name(log_callback):
             conn = sqlite3.connect(client_file)
             cursor = conn.cursor()
 
+            # --- Harness_Body (Origin -> ∞) patch ---
+            cursor.execute("UPDATE Loc SET enUS = REPLACE(enUS, 'Origin', '∞') WHERE key = 'AbilityHanger/Keyword/Harness_Body'")
+            cursor.execute("UPDATE Loc SET koKR = REPLACE(koKR, '기원', '∞') WHERE key = 'AbilityHanger/Keyword/Harness_Body'")
+
             try:
                 cursor.execute("SELECT key, enUS, koKR FROM Loc")
                 rows = cursor.fetchall()
@@ -914,45 +953,12 @@ def patch_spiderman_expansion_name(log_callback):
 
             if en_updates: cursor.executemany("UPDATE Loc SET enUS = ? WHERE key = ?", en_updates)
             if ko_updates: cursor.executemany("UPDATE Loc SET koKR = ? WHERE key = ?", ko_updates)
-            if en_updates or ko_updates:
-                conn.commit()
-                # log_callback(f"  - {os.path.basename(client_file)} 파일에 변경사항을 저장했습니다.")
-
-        except sqlite3.Error as e:
-            log_callback(f"  - 확장팩 이름 변경 중 DB 오류 발생: {e}")
-        finally:
-            if conn: conn.close()
-
-def patch_soul_stone_card(log_callback):
-    # log_callback("  - '영혼석' 관련 카드(1072918) 텍스트를 수정합니다 (단순 치환 방식)...")
-    
-    card_db_files = glob.glob(os.path.join(application_path, 'Raw_CardDatabase_*.mtga'))
-    if not card_db_files:
-        log_callback("    - 카드 데이터베이스 파일을 찾지 못해 건너뜁니다.")
-        return
-
-    for card_db_path in card_db_files:
-        conn = None
-        try:
-            conn = sqlite3.connect(card_db_path)
-            cursor = conn.cursor()
-            
-            # --- English Localization ---
-            # As per user request, use a simple REPLACE since the keyword is unique.
-            cursor.execute("UPDATE Localizations_enUS SET Loc = REPLACE(Loc, 'Origin', '∞') WHERE LocId = 1072918")
-            en_changes = cursor.rowcount
-
-            # --- Korean Localization ---
-            cursor.execute("UPDATE Localizations_koKR SET Loc = REPLACE(Loc, '기원', '∞') WHERE LocId = 1072918")
-            ko_changes = cursor.rowcount
             
             conn.commit()
-            
-            if en_changes == 0 and ko_changes == 0:
-                log_callback("    - 카드 데이터베이스에서 LocId 1072918에 해당하는 수정 대상을 찾지 못했습니다.")
+            # log_callback(f"  - {os.path.basename(client_file)} 파일에 변경사항을 저장했습니다.")
 
         except sqlite3.Error as e:
-            log_callback(f"    - 카드 DB 수정 중 오류 발생: {e}")
+            log_callback(f"  - 클라이언트 DB 수정 중 오류 발생: {e}")
         finally:
             if conn: conn.close()
 
@@ -1180,10 +1186,10 @@ def patch_seek_keyword(log_callback):
 def run_patch_removal(log_callback, script_base_path):
     log_callback("=== 패치 제거 시작 ===")
     
-    # 1. Remove patched asset bundles
+    # 1. Remove patched image asset bundles
     patch_log_path = os.path.join(script_base_path, 'patch_log.json')
     if os.path.exists(patch_log_path):
-        log_callback("  - patch_log.json을 기반으로 에셋 번들 제거 중...")
+        log_callback("  - patch_log.json을 기반으로 이미지 에셋 번들 제거 중...")
         try:
             with open(patch_log_path, 'r', encoding='utf-8') as f:
                 patch_log = json.load(f)
@@ -1195,11 +1201,9 @@ def run_patch_removal(log_callback, script_base_path):
                 for key, value in patched_items.items():
                     found_files = []
                     if key.startswith("sleeve_"):
-                        if isinstance(value, dict): # New format for sleeves
-                            bucket_id = value.get('bucket_id')
-                            if bucket_id:
-                                asset_pattern = os.path.join(asset_bundle_path, f"*{bucket_id}*")
-                                found_files = glob.glob(asset_pattern)
+                        if isinstance(value, dict) and value.get('bucket_id'):
+                            asset_pattern = os.path.join(asset_bundle_path, f"*{value.get('bucket_id')}*")
+                            found_files = glob.glob(asset_pattern)
                     else: # Old format for cards
                         art_id = key
                         asset_pattern = os.path.join(asset_bundle_path, f"{str(art_id).zfill(6)}_CardArt_*")
@@ -1212,9 +1216,9 @@ def run_patch_removal(log_callback, script_base_path):
                             removed_count += 1
                         except OSError as e:
                             log_callback(f"    - 오류: {os.path.basename(file_path)} 삭제 실패: {e}")
-                log_callback(f"  - 총 {removed_count}개의 에셋 번들 파일을 삭제했습니다.")
+                log_callback(f"  - 총 {removed_count}개의 이미지 에셋 번들 파일을 삭제했습니다.")
             else:
-                log_callback("  - 제거할 에셋 번들 로그가 없습니다.")
+                log_callback("  - 제거할 이미지 에셋 번들 로그가 없습니다.")
 
             # Remove the log file itself
             try:
@@ -1226,26 +1230,28 @@ def run_patch_removal(log_callback, script_base_path):
         except (json.JSONDecodeError, IOError) as e:
             log_callback(f"  - 오류: patch_log.json 읽기 실패: {e}")
     else:
-        log_callback("  - patch_log.json을 찾을 수 없어 에셋 번들 제거를 건너뜁니다.")
+        log_callback("  - patch_log.json을 찾을 수 없어 이미지 에셋 번들 제거를 건너뜁니다.")
 
     # 2. Remove database files
     log_callback("  - 데이터베이스 파일 제거 중...")
     files_to_remove = []
+    
+    # Database files in 'Raw'
     db_pattern = os.path.join(application_path, 'Raw_CardDatabase_*.mtga')
     client_pattern = os.path.join(application_path, 'Raw_ClientLocalization_*.mtga')
     files_to_remove.extend(glob.glob(db_pattern))
     files_to_remove.extend(glob.glob(client_pattern))
 
     if files_to_remove:
-        removed_db_count = 0
+        removed_file_count = 0
         for file_path in files_to_remove:
             try:
                 os.remove(file_path)
                 log_callback(f"    - 삭제됨: {os.path.basename(file_path)}")
-                removed_db_count += 1
+                removed_file_count += 1
             except OSError as e:
                 log_callback(f"    - 오류: {os.path.basename(file_path)} 삭제 실패: {e}")
-        log_callback(f"  - 총 {removed_db_count}개의 데이터베이스 파일을 삭제했습니다.")
+        log_callback(f"  - 총 {removed_file_count}개의 데이터베이스 파일을 삭제했습니다.")
     else:
         log_callback("  - 제거할 데이터베이스 파일을 찾지 못했습니다.")
     
