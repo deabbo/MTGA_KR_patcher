@@ -124,7 +124,7 @@ def get_target_card_data(log_callback):
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         query_cards = """SELECT ArtId, GrpId, ExpansionCode, InterchangeableTitleId, titleId FROM Cards 
-                       WHERE (InterchangeableTitleId IS NOT NULL AND InterchangeableTitleId != 0) 
+                       WHERE (InterchangeableTitleId IS NOT NULL AND InterchangeableTitleId != 0)
                           OR (ExpansionCode glob 'OM[0-9]*') OR ExpansionCode = 'OMB'"""
         cursor.execute(query_cards)
         initial_results = cursor.fetchall()
@@ -551,11 +551,106 @@ def run_english_name_patch(log_callback):
         if conn: conn.close()
 
 
+def replace_sleeve_art(sleeve_bucket_id, image_content, log_callback):
+    asset_bundle_dir = os.path.join(application_path, "..", "AssetBundle")
+    asset_bundle_pattern = os.path.join(asset_bundle_dir, f"{sleeve_bucket_id}*")
+    found_files = glob.glob(asset_bundle_pattern)
+    
+    if not found_files:
+        log_callback(f"  - 정보: 슬리브 에셋 '{sleeve_bucket_id}'을(를) 찾을 수 없습니다. 건너킵니다.")
+        return False
+
+    if len(found_files) > 1:
+        log_callback(f"  - 경고: 슬리브 에셋 '{sleeve_bucket_id}'에 대해 여러 에셋 번들이 발견되었습니다. 첫 번째 파일({os.path.basename(found_files[0])})을 사용합니다.")
+    
+    asset_path = found_files[0]
+
+    try:
+        downloaded_image = Image.open(io.BytesIO(image_content))
+        env = UnityPy.load(asset_path)
+        
+        # Find the specific Texture2D object whose name starts with "CardBack_"
+        card_back_textures = [
+            obj.read() for obj in env.objects 
+            if obj.type.name == "Texture2D" and obj.read().m_Name.startswith("CardBack_")
+        ]
+        
+        if not card_back_textures:
+            # Fallback for logging if the primary target is not found
+            all_texture_names = [obj.read().m_Name for obj in env.objects if obj.type.name == "Texture2D"]
+            log_callback(f"  - 정보: 에셋 번들 {os.path.basename(asset_path)}에서 'CardBack_'으로 시작하는 Texture2D를 찾을 수 없습니다. 사용 가능한 텍스쳐: {all_texture_names}. 건너뜁니다.")
+            return False
+
+        # Replace all found textures that match the criteria
+        for target_obj in card_back_textures:
+            target_obj.image = downloaded_image
+            target_obj.save()
+            
+        with open(asset_path, "wb") as f:
+            f.write(env.file.save())
+        
+        return True
+            
+    except Exception as e:
+        log_callback(f"  - 오류: 슬리브 에셋 {os.path.basename(asset_path)} 작업 중 에러 발생: {e}\n{traceback.format_exc()}")
+        return False
+
+def update_sleeve_names(log_callback, sleeve_data, translation_data):
+    client_files = glob.glob(os.path.join(application_path, 'Raw_ClientLocalization_*.mtga'))
+    if not client_files:
+        log_callback("  - 클라이언트 파일을 찾을 수 없어 슬리브 이름 변경을 건너뜁니다.")
+        return
+
+    translation_map = {normalize_name(card['origin_en_name']): card for card in translation_data}
+    
+    for client_file in client_files:
+        conn = None
+        try:
+            conn = sqlite3.connect(client_file)
+            cursor = conn.cursor()
+            
+            updates = []
+            for art_id, data in sleeve_data.items():
+                key = data['key']
+                cursor.execute("SELECT enUS FROM Loc WHERE key = ?", (key,))
+                result = cursor.fetchone()
+                if not result or not result[0]:
+                    # log_callback(f"  - 정보: DB에서 슬리브 키 '{key}'의 영어 이름을 찾지 못했습니다.")
+                    continue
+                
+                original_en_sleeve_name = result[0]
+                base_name_en = original_en_sleeve_name.replace(" Sleeve", "").strip()
+                normalized_base_name = normalize_name(base_name_en)
+
+                if normalized_base_name in translation_map:
+                    match = translation_map[normalized_base_name]
+                    new_en_name = match.get('new_en_name')
+                    new_ko_name_nfc = match.get('new_ko_name', {}).get('nfc')
+
+                    if new_en_name and new_ko_name_nfc:
+                        final_new_en = f"{new_en_name} Sleeve"
+                        final_new_ko = f"{new_ko_name_nfc} 슬리브"
+                        updates.append((final_new_en, final_new_ko, key))
+                # else:
+                    # log_callback(f"  - 정보: 번역 데이터에서 '{base_name_en}'에 대한 항목을 찾지 못했습니다.")
+
+            if updates:
+                cursor.executemany("UPDATE Loc SET enUS = ?, koKR = ? WHERE key = ?", updates)
+                conn.commit()
+                log_callback(f"  - 총 {len(updates)}개의 슬리브 이름을 업데이트했습니다.")
+
+        except sqlite3.Error as e:
+            log_callback(f"  - 슬리브 이름 변경 중 DB 오류 발생: {e}")
+        finally:
+            if conn: conn.close()
+
 def run_image_change(log_callback, name_option, script_base_path):
     log_callback("=== 실물 카드 패치 시작 ===")
     patch_spiderman_expansion_name(log_callback)
     patch_soul_stone_card(log_callback)
-    log_callback("=== 일러스트 교체 시작 ==="); setup_unitypy()
+    
+    setup_unitypy()
+
     target_cards = get_target_card_data(log_callback)
     if not target_cards: 
         log_callback("이미지 교체 대상 카드가 없습니다.")
@@ -571,71 +666,144 @@ def run_image_change(log_callback, name_option, script_base_path):
             log_callback(f"  - 경고: patch_log.json 파일을 읽는 중 오류 발생: {e}. 로그를 새로 시작합니다.")
             patch_log = {}
     
-    if 'patched_images' not in patch_log:
-        patch_log['patched_images'] = {}
+    # --- Define sleeve data map ---
+    sleeve_data_map = {
+        "461218": {"bucket_id": "Textures_Bucket_Card.Sleeve_1096", "key": "MainNav/DeckBuilder/Sleeves/CardBack_OM1_461218", "exp_code": "OM1"},
+        "461290": {"bucket_id": "Textures_Bucket_Card.Sleeve_1099", "key": "MainNav/DeckBuilder/Sleeves/CardBack_OM1_461290", "exp_code": "OM1"},
+        "461308": {"bucket_id": "Textures_Bucket_Card.Sleeve_1101", "key": "MainNav/DeckBuilder/Sleeves/CardBack_OM1_461308", "exp_code": "OM1"},
+        "461311": {"bucket_id": "Textures_Bucket_Card.Sleeve_1102", "key": "MainNav/DeckBuilder/Sleeves/CardBack_OM1_461311", "exp_code": "OM1"},
+        "461328": {"bucket_id": "Textures_Bucket_Card.Sleeve_1103", "key": "MainNav/DeckBuilder/Sleeves/CardBack_OM1_461328", "exp_code": "OM1"},
+        "461338": {"bucket_id": "Textures_Bucket_Card.Sleeve_1105", "key": "MainNav/DeckBuilder/Sleeves/CardBack_OM1_461338", "exp_code": "OM1"},
+    }
 
-    unique_expansion_codes = set(card['ExpansionCode'] for card in target_cards)
-    scryfall_data = fetch_all_sets_data(unique_expansion_codes, log_callback)
-    
-    art_id_to_url, scryfall_missing_cards, asset_missing_cards = {}, [], []
-    
-    log_callback("--- Scryfall에서 카드 정보 조회 및 패치 여부 확인 ---")
+    # --- Collect all art_ids for both cards and sleeves ---
+    all_art_ids_to_fetch_url = {} # art_id -> {"name": card_name, "exp_code": exp_code, "is_sleeve": bool}
+    all_expansion_codes = set()
+
+    # For regular cards
     for card in target_cards:
-        art_id, exp_code = card['ArtId'], card['ExpansionCode']
+        art_id, exp_code = str(card['ArtId']), card['ExpansionCode']
         title_name = card.get('titleName')
         interchange_name = card.get('interchangeName')
+        card_name = interchange_name or title_name
+        if card_name:
+            all_art_ids_to_fetch_url[art_id] = {"name": card_name, "exp_code": exp_code, "is_sleeve": False}
+            all_expansion_codes.add(exp_code)
 
-        card_info = None
-        
-        # 1. Try to find with titleName first
-        if title_name:
-            normalized_title_name = normalize_name(title_name)
-            card_info = scryfall_data.get(exp_code, {}).get(normalized_title_name)
+    # For sleeves
+    sleeve_art_id_to_name = {}
+    for card in target_cards: # Re-use target_cards to get sleeve names
+        art_id = str(card['ArtId'])
+        if art_id in sleeve_data_map:
+            card_name = card.get('interchangeName') or card.get('titleName')
+            if card_name:
+                sleeve_art_id_to_name[art_id] = card_name
+                all_art_ids_to_fetch_url[art_id] = {"name": card_name, "exp_code": sleeve_data_map[art_id]['exp_code'], "is_sleeve": True}
+                all_expansion_codes.add(sleeve_data_map[art_id]['exp_code'])
 
-        # 2. If that fails, try with interchangeName
-        if not card_info and interchange_name:
-            normalized_interchange_name = normalize_name(interchange_name)
-            card_info = scryfall_data.get(exp_code, {}).get(normalized_interchange_name)
+    # --- Fetch Scryfall data once for all ---
+    scryfall_data = fetch_all_sets_data(all_expansion_codes, log_callback)
 
-        if not (card_info and 'image_uris' in card_info and 'art_crop' in card_info['image_uris']):
-            scryfall_missing_cards.append(card)
-            continue
+    # --- Determine URLs for all art_ids that need patching ---
+    art_ids_to_download = {} # art_id -> url
+    for art_id, card_info_dict in all_art_ids_to_fetch_url.items():
+        card_name = card_info_dict["name"]
+        exp_code = card_info_dict["exp_code"]
+        is_sleeve = card_info_dict["is_sleeve"]
 
-        url = card_info['image_uris']['art_crop']
-        if str(art_id) in patch_log['patched_images'] and patch_log['patched_images'][str(art_id)] == url:
-            continue
+        normalized_name = normalize_name(card_name)
+        card_info = scryfall_data.get(exp_code, {}).get(normalized_name)
+        if card_info and 'image_uris' in card_info and 'art_crop' in card_info['image_uris']:
+            url = card_info['image_uris']['art_crop']
+            
+            log_key = f"sleeve_{art_id}" if is_sleeve else str(art_id)
+            log_entry = patch_log.get('patched_images', {}).get(log_key)
+            
+            is_patched_with_same_url = False
+            if log_entry:
+                if is_sleeve and isinstance(log_entry, dict) and log_entry.get('url') == url:
+                    is_patched_with_same_url = True
+                elif not is_sleeve and log_entry == url: # Old format for cards
+                    is_patched_with_same_url = True
 
-        asset_bundle_pattern = os.path.join(application_path, "..", "AssetBundle", f"{str(art_id).zfill(6)}_CardArt_*")
-        if glob.glob(asset_bundle_pattern):
-            art_id_to_url[art_id] = url
+            if not is_patched_with_same_url:
+                art_ids_to_download[art_id] = url
         else:
-            asset_missing_cards.append(card)
+            log_callback(f"  - 정보: Scryfall에서 ArtId {art_id} ({card_name})의 이미지를 찾지 못했습니다.")
 
-    if art_id_to_url:
-        downloaded_images = download_images(art_id_to_url, log_callback)
-        if downloaded_images:
-            log_callback("--- 다운로드된 이미지를 에셋에 적용 시작 ---")
-            total = len(downloaded_images)
-            patched_count = 0
-            for i, (art_id, image_data) in enumerate(downloaded_images.items()):
-                log_callback(f"  에셋 적용: ({i + 1}/{total})", update_last_line=True)
-                success = replace_card_art(art_id, image_data, log_callback)
-                if success:
-                    patched_count += 1
-                    patch_log['patched_images'][str(art_id)] = art_id_to_url[art_id]
-            
-            log_callback(f"에셋 적용 완료. ({patched_count}개 적용됨)")
-            log_callback("=== 커스텀 일러스트 패치 완료 ===")
-            
-            try:
-                with open(patch_log_path, 'w', encoding='utf-8') as f:
-                    json.dump(patch_log, f, indent=2, ensure_ascii=False)
-            except IOError as e:
-                log_callback(f"  - 경고: patch_log.json 파일에 쓰는 중 오류 발생: {e}")
+    # --- Download all images once ---
+    downloaded_images = {}
+    if art_ids_to_download:
+        downloaded_images = download_images(art_ids_to_download, log_callback)
     else:
-        log_callback("새롭게 교체할 이미지가 없거나 이미 처리되었습니다.")
+        log_callback("새롭게 다운로드할 이미지가 없거나 이미 처리되었습니다.")
 
-    update_card_names(log_callback, name_option)
+    # --- Patch sleeves ---
+    log_callback("=== 카드 슬리브 교체 시작 ===")
+    if downloaded_images:
+        patched_sleeve_count = 0
+        total_sleeves_to_patch = len([art_id for art_id in sleeve_data_map if art_id in downloaded_images])
+        current_sleeve_patch_count = 0
+        for art_id, data in sleeve_data_map.items():
+            if art_id in downloaded_images:
+                current_sleeve_patch_count += 1
+                log_callback(f"  슬리브 에셋 적용: ({current_sleeve_patch_count}/{total_sleeves_to_patch})", update_last_line=True)
+                
+                bucket_id = data['bucket_id']
+                image_data = downloaded_images[art_id]
+                success = replace_sleeve_art(bucket_id, image_data, log_callback)
+                if success:
+                    patched_sleeve_count += 1
+                    sleeve_log_key = f"sleeve_{art_id}"
+                    if 'patched_images' not in patch_log: patch_log['patched_images'] = {}
+                    patch_log['patched_images'][sleeve_log_key] = {"url": art_ids_to_download[art_id], "bucket_id": bucket_id}
+        log_callback(f"  슬리브 에셋 적용 완료. ({patched_sleeve_count}개 적용됨)")
+    else:
+        log_callback("새롭게 교체할 슬리브 이미지가 없거나 이미 처리되었습니다.")
+
+    # --- Patch regular cards ---
+    log_callback("=== 일러스트 교체 시작 ===")
+    if downloaded_images:
+        patched_card_count = 0
+        total_cards_to_patch = len([art_id for art_id in all_art_ids_to_fetch_url if not all_art_ids_to_fetch_url[art_id]["is_sleeve"] and art_id in downloaded_images])
+        current_card_patch_count = 0
+        for art_id, image_data in downloaded_images.items():
+            if all_art_ids_to_fetch_url.get(art_id, {}).get("is_sleeve"): # Skip sleeves
+                continue
+
+            current_card_patch_count += 1
+            log_callback(f"  에셋 적용: ({current_card_patch_count}/{total_cards_to_patch})", update_last_line=True)
+            success = replace_card_art(int(art_id), image_data, log_callback)
+            if success:
+                patched_card_count += 1
+                if 'patched_images' not in patch_log: patch_log['patched_images'] = {}
+                patch_log['patched_images'][str(art_id)] = art_ids_to_download[art_id]
+        
+        log_callback(f"에셋 적용 완료. ({patched_card_count}개 적용됨)")
+        log_callback("=== 커스텀 일러스트 패치 완료 ===")
+            
+    else:
+        log_callback("새롭게 교체할 카드 이미지가 없거나 이미 처리되었습니다.")
+
+    # Save the patch log, which now contains both card and sleeve info
+    try:
+        with open(patch_log_path, 'w', encoding='utf-8') as f:
+            json.dump(patch_log, f, indent=2, ensure_ascii=False)
+    except IOError as e:
+        log_callback(f"  - 경고: patch_log.json 파일에 쓰는 중 오류 발생: {e}")
+
+    # --- Update names for both cards and sleeves ---
+    # Call update_sleeve_names here, as it needs sleeve_data_map and translation_data
+    if name_option == "unofficial_korean":
+        log_callback("  - 슬리브 이름 비공식 한국어로 변경 시작...")
+        json_url = "https://drive.usercontent.google.com/u/0/uc?id=1sEroW-b2FxC6rsH6-gTsRsj_5iADgcWm&confirm=t"
+        translation_data = fetch_json_from_url(json_url, log_callback)
+        if translation_data:
+            update_sleeve_names(log_callback, sleeve_data_map, translation_data)
+        else:
+            log_callback("  - 비공식 한국어 이름 데이터를 가져오지 못해 슬리브 이름 변경을 건너뜁니다.")
+    
+    update_card_names(log_callback, name_option) # This already handles regular cards
 
 def fetch_json_from_url(url, log_callback):
     try: response = requests.get(url); response.raise_for_status(); return response.json()
@@ -831,7 +999,7 @@ def run_localization_patch(log_callback):
                 card_conn = sqlite3.connect(card_file)
                 card_cursor = card_conn.cursor()
                 
-                card_cursor.execute("SELECT LocId, Loc, Formatted FROM Localizations_koKR WHERE Loc LIKE '%&lt;%' OR Loc LIKE '%&gt;%'")
+                card_cursor.execute("SELECT LocId, Loc, Formatted FROM Localizations_koKR WHERE Loc LIKE '%&lt;%' OR Loc LIKE '%&gt;%'" )
                 rows_to_update = card_cursor.fetchall()
                 for loc_id, loc_text, formatted in rows_to_update:
                     new_loc_text = loc_text.replace('&lt;', '<').replace('&gt;', '>')
@@ -888,7 +1056,7 @@ def patch_seek_keyword(log_callback):
         cursor = conn.cursor()
 
         # Step 1: Get all LocIds for abilities of cards in 'Y' expansions.
-        cursor.execute("SELECT AbilityIds, HiddenAbilityIds FROM Cards WHERE ExpansionCode LIKE 'Y%'")
+        cursor.execute("SELECT AbilityIds, HiddenAbilityIds FROM Cards WHERE ExpansionCode LIKE 'Y%'" )
         rows = cursor.fetchall()
         
         all_ability_ids = set()
@@ -1015,13 +1183,23 @@ def run_patch_removal(log_callback, script_base_path):
             with open(patch_log_path, 'r', encoding='utf-8') as f:
                 patch_log = json.load(f)
             
-            patched_art_ids = patch_log.get('patched_images', {}).keys()
-            if patched_art_ids:
+            patched_items = patch_log.get('patched_images', {})
+            if patched_items:
                 asset_bundle_path = os.path.join(application_path, "..", "AssetBundle")
                 removed_count = 0
-                for art_id in patched_art_ids:
-                    asset_pattern = os.path.join(asset_bundle_path, f"{str(art_id).zfill(6)}_CardArt_*")
-                    found_files = glob.glob(asset_pattern)
+                for key, value in patched_items.items():
+                    found_files = []
+                    if key.startswith("sleeve_"):
+                        if isinstance(value, dict): # New format for sleeves
+                            bucket_id = value.get('bucket_id')
+                            if bucket_id:
+                                asset_pattern = os.path.join(asset_bundle_path, f"*{bucket_id}*")
+                                found_files = glob.glob(asset_pattern)
+                    else: # Old format for cards
+                        art_id = key
+                        asset_pattern = os.path.join(asset_bundle_path, f"{str(art_id).zfill(6)}_CardArt_*")
+                        found_files = glob.glob(asset_pattern)
+
                     for file_path in found_files:
                         try:
                             os.remove(file_path)
@@ -1222,7 +1400,7 @@ class PatcherWindow(QWidget):
             texts.append("영문 이름")
 
         if texts:
-            self.run_button.setText(f"{' & '.join(texts)} 패치 시작")
+            self.run_button.setText(f"{ ' & '.join(texts)} 패치 시작")
         else:
             self.run_button.setText("옵션을 선택하세요")
 
