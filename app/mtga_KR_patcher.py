@@ -63,7 +63,7 @@ def check_for_updates():
 # Pillow와 UnityPy는 외부 라이브러리이므로, 실행 전 설치가 필요합니다.
 try:
     import UnityPy
-    from PIL import Image
+    from PIL import Image, ImageOps
 except ImportError:
     print("필수 라이브러리가 설치되지 않았습니다. 'pip install UnityPy Pillow' 명령어로 설치해주세요.")
     os.system("pause")
@@ -567,6 +567,11 @@ def replace_sleeve_art(sleeve_bucket_id, image_content, log_callback):
 
     try:
         downloaded_image = Image.open(io.BytesIO(image_content))
+        
+        # Add 35px black letterbox
+        border_size = 35
+        downloaded_image = ImageOps.expand(downloaded_image, border=border_size, fill='black')
+
         env = UnityPy.load(asset_path)
         
         # Find the specific Texture2D object whose name starts with "CardBack_"
