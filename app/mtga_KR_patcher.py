@@ -19,7 +19,7 @@ from PySide6.QtCore import QObject, Signal, QThread, QTimer
 from PySide6.QtGui import QTextCursor
 
 # --- Auto-Update Logic ---
-__version__ = "1.4"
+__version__ = "1.5"
 # NOTE: These URLs point to the raw files in the main branch of the GitHub repository.
 VERSION_CHECK_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/version.json"
 SCRIPT_UPDATE_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/app/mtga_KR_patcher.py"
@@ -347,17 +347,21 @@ def update_card_names(log_callback, name_option):
                         cursor.execute("UPDATE Localizations_koKR SET Loc = ? WHERE LocId = ? AND Formatted = ?", (ko_loc, interchangeable_id, fmt)); update_count += cursor.rowcount
             conn.commit()
             log_callback(f"  - 총 {update_count}개의 이름 항목을 업데이트했습니다.")
-            update_ability_text(log_callback, translation_data)
         except Exception as e:
             log_callback(f"  - 카드 이름 변경 중 오류 발생: {e}")
         finally:
             if conn: conn.close()
+            update_ability_text(log_callback, translation_data)
+            data_URL = "https://docs.google.com/uc?export=download&id=18cwjLJPJqt0KuBPTYB2aIGcu_axbb4ET&confirm=t"
+            patch_card_text(log_callback, data_URL)
+            
 
 def has_final_consonant(char):
     if '가' <= char <= '힣': return (ord(char) - ord('가')) % 28 > 0
     return True
 
 def update_ability_text(log_callback, translation_data, only_english=False):
+    log_callback("  - 비공식 한국어 카드능력 변경 시작...")
     db_files = glob.glob(os.path.join(application_path, 'Raw_CardDatabase_*.mtga'))
     if not db_files: return
     db_path = db_files[0]
@@ -844,12 +848,73 @@ def run_image_change(log_callback, name_option, script_base_path):
             log_callback("  - 비공식 한국어 이름 데이터를 가져오지 못해 슬리브 이름 변경을 건너뜁니다.")
     
     update_card_names(log_callback, name_option) # This already handles regular cards
+    
 
 def fetch_json_from_url(url, log_callback):
     try: response = requests.get(url); response.raise_for_status(); return response.json()
     except requests.exceptions.RequestException as e: log_callback(f"웹에서 데이터를 가져오는 중 오류 발생: {e}"); return None
 
 def formatting_for_2(text): return unicodedata.normalize('NFD', text)
+
+def patch_card_text(log_callback, data_URL):
+    """사용자 정의 JSON 파일을 읽어 DB에 패치를 적용합니다."""
+    log_callback(f"=== 카드 텍스트 변경시작 ===")
+
+    card_file_pattern = os.path.join(application_path, 'Raw_CardDatabase_*.mtga')
+    card_files = glob.glob(card_file_pattern)
+    if not card_files:
+        log_callback(f"카드 텍스트 변경실패")
+    else:
+        log_callback("카드 번역 데이터 불러오는중...")
+        card_values_to_update = fetch_json_from_url(data_URL, log_callback)
+
+        for card_file in card_files:
+            # log_callback(f"카드 데이터베이스 처리 중: {card_file}")
+            try:
+                card_conn = sqlite3.connect(card_file)
+                card_cursor = card_conn.cursor()
+                
+                card_cursor.execute("SELECT LocId, Loc, Formatted FROM Localizations_koKR WHERE Loc LIKE '%&lt;%' OR Loc LIKE '%&gt;%'" )
+                rows_to_update = card_cursor.fetchall()
+                for loc_id, loc_text, formatted in rows_to_update:
+                    new_loc_text = loc_text.replace('&lt;', '<').replace('&gt;', '>')
+                    if formatted == 2: new_loc_text = formatting_for_2(new_loc_text)
+                    else: new_loc_text = unicodedata.normalize('NFC', new_loc_text)
+                    if new_loc_text != loc_text:
+                        card_cursor.execute("UPDATE Localizations_koKR SET Loc = ? WHERE LocId = ? AND Formatted = ?", (new_loc_text, loc_id, formatted))
+
+                if card_values_to_update:
+                    for card in card_values_to_update:
+                        search_value = card['LocId']
+                        value_for_0 = card['Formatted_0']
+                        value_for_1 = card['Formatted_1']
+                        value_for_2 = formatting_for_2(card['Formatted_0'])
+                        
+                        card_cursor.execute("SELECT Formatted FROM Localizations_koKR WHERE LocId = ?", (search_value,))
+                        rows = card_cursor.fetchall()
+
+                        if not rows:
+                            continue
+                        
+                        for row in rows:
+                            formatted_value = row[0]
+                            new_value = None
+                            if formatted_value == 0: new_value = value_for_0
+                            elif formatted_value == 1: new_value = value_for_1 if value_for_1 else value_for_0
+                            elif formatted_value == 2: new_value = value_for_2
+                            
+                            if new_value:
+                                card_cursor.execute("UPDATE Localizations_koKR SET Loc = ? WHERE LocId = ? AND Formatted = ?", (new_value, search_value, formatted_value))
+
+                card_conn.commit()
+                log_callback("  - 카드 데이터베이스 수정 완료.")
+
+            except sqlite3.Error as e:
+                log_callback(f"    - 에러 발생: {e}")
+            finally:
+                if card_conn: card_conn.close()
+        
+
 
 def patch_spiderman_expansion_name(log_callback):
     client_files = glob.glob(os.path.join(application_path, 'Raw_ClientLocalization_*.mtga'))
@@ -995,60 +1060,7 @@ def run_localization_patch(log_callback):
             log_callback("UI 번역 데이터를 가져오지 못했습니다.")
 
     # 2. 카드 오역 수정
-    card_file_pattern = os.path.join(application_path, 'Raw_CardDatabase_*.mtga')
-    card_files = glob.glob(card_file_pattern)
-    if not card_files:
-        log_callback(f"카드 데이터베이스 파일을 찾지 못했습니다. 카드 관련 패치를 건너뜁니다.")
-    else:
-        log_callback("카드 번역 데이터 불러오는중...")
-        card_json_url = "https://docs.google.com/uc?export=download&id=1pSF_YCV0NPuy240Rtt0bzOmr1GyE5HMd&confirm=t"
-        card_values_to_update = fetch_json_from_url(card_json_url, log_callback)
-
-        for card_file in card_files:
-            # log_callback(f"카드 데이터베이스 처리 중: {card_file}")
-            try:
-                card_conn = sqlite3.connect(card_file)
-                card_cursor = card_conn.cursor()
-                
-                card_cursor.execute("SELECT LocId, Loc, Formatted FROM Localizations_koKR WHERE Loc LIKE '%&lt;%' OR Loc LIKE '%&gt;%'" )
-                rows_to_update = card_cursor.fetchall()
-                for loc_id, loc_text, formatted in rows_to_update:
-                    new_loc_text = loc_text.replace('&lt;', '<').replace('&gt;', '>')
-                    if formatted == 2: new_loc_text = formatting_for_2(new_loc_text)
-                    else: new_loc_text = unicodedata.normalize('NFC', new_loc_text)
-                    if new_loc_text != loc_text:
-                        card_cursor.execute("UPDATE Localizations_koKR SET Loc = ? WHERE LocId = ? AND Formatted = ?", (new_loc_text, loc_id, formatted))
-
-                if card_values_to_update:
-                    for card in card_values_to_update:
-                        search_value = card['LocId']
-                        value_for_0 = card['Formatted_0']
-                        value_for_1 = card['Formatted_1']
-                        value_for_2 = formatting_for_2(card['Formatted_0'])
-                        
-                        card_cursor.execute("SELECT Formatted FROM Localizations_koKR WHERE LocId = ?", (search_value,))
-                        rows = card_cursor.fetchall()
-
-                        if not rows:
-                            continue
-                        
-                        for row in rows:
-                            formatted_value = row[0]
-                            new_value = None
-                            if formatted_value == 0: new_value = value_for_0
-                            elif formatted_value == 1: new_value = value_for_1 if value_for_1 else value_for_0
-                            elif formatted_value == 2: new_value = value_for_2
-                            
-                            if new_value:
-                                card_cursor.execute("UPDATE Localizations_koKR SET Loc = ? WHERE LocId = ? AND Formatted = ?", (new_value, search_value, formatted_value))
-
-                card_conn.commit()
-                log_callback("  - 카드 데이터베이스 수정 완료.")
-
-            except sqlite3.Error as e:
-                log_callback(f"    - 에러 발생: {e}")
-            finally:
-                if 'card_conn' in locals() and card_conn: card_conn.close()
+    patch_card_text(log_callback, "https://docs.google.com/uc?export=download&id=1pSF_YCV0NPuy240Rtt0bzOmr1GyE5HMd&confirm=t")
     
     patch_seek_keyword(log_callback)
     log_callback("=== 한글 오역 패치 완료 ===")
