@@ -19,7 +19,7 @@ from PySide6.QtCore import QObject, Signal, QThread, QTimer
 from PySide6.QtGui import QTextCursor
 
 # --- Auto-Update Logic ---
-__version__ = "1.5"
+__version__ = "1.6"
 # NOTE: These URLs point to the raw files in the main branch of the GitHub repository.
 VERSION_CHECK_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/version.json"
 SCRIPT_UPDATE_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/app/mtga_KR_patcher.py"
@@ -1063,7 +1063,260 @@ def run_localization_patch(log_callback):
     patch_card_text(log_callback, "https://docs.google.com/uc?export=download&id=1pSF_YCV0NPuy240Rtt0bzOmr1GyE5HMd&confirm=t")
     
     patch_seek_keyword(log_callback)
+    patch_sneak_keyword(log_callback)
+    patch_vanishing_keyword(log_callback)
     log_callback("=== 한글 오역 패치 완료 ===")
+
+def patch_vanishing_keyword(log_callback):
+    log_callback("  - '소실' -> '사라짐' 키워드 패치 시작...")
+    db_files = glob.glob(os.path.join(application_path, 'Raw_CardDatabase_*.mtga'))
+    if not db_files:
+        log_callback("    - 카드 데이터베이스를 찾을 수 없어 건너뜁니다.")
+        return
+
+    db_path = db_files[0]
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # 1. AbilityWord = 394 인 항목의 Id와 TextId 조회
+        try:
+            cursor.execute("SELECT Id, TextId FROM Abilities WHERE AbilityWord = 53")
+            ability_rows = cursor.fetchall()
+        except sqlite3.OperationalError:
+            log_callback("    - 'Abilities' 테이블에 'AbilityWord' 컬럼이 없거나 쿼리 오류.")
+            return
+        
+
+        if not ability_rows:
+            log_callback("    - '소실' 관련 능력 텍스트 ID를 찾지 못했습니다.")
+            return
+
+        target_loc_ids = set()
+        redirect_check_ability_ids = set()
+
+        # 2. TextId 수집 및 #NoTranslationNeeded 확인
+        text_ids_to_check = {str(row[1]) for row in ability_rows if row[1]}
+        
+        loc_lookup = {}
+        if text_ids_to_check:
+            placeholders = ', '.join('?' * len(text_ids_to_check))
+            cursor.execute(f"SELECT LocId, Loc FROM Localizations_koKR WHERE LocId IN ({placeholders})", list(text_ids_to_check))
+            
+            rows = cursor.fetchall()
+            for row in rows:
+                loc_id = str(row[0])
+                loc_text = row[1]
+                if loc_id not in loc_lookup or loc_text == "#NoTranslationNeeded":
+                    loc_lookup[loc_id] = loc_text
+
+        # 3. 분류
+        for ab_id, text_id in ability_rows:
+            if not text_id: continue
+            
+            val = loc_lookup.get(str(text_id))
+            if val == "#NoTranslationNeeded":
+                redirect_check_ability_ids.add(ab_id)
+            elif val:
+                target_loc_ids.add(str(text_id))
+
+
+        # 4. 리다이렉트 처리 (Cards 테이블 스캔)
+        if redirect_check_ability_ids:
+            cursor.execute("SELECT AbilityIds FROM Cards WHERE AbilityIds IS NOT NULL AND AbilityIds LIKE '%:%'")
+            
+            card_rows = cursor.fetchall()
+            found_redirects = 0
+            
+            for (ab_ids_str,) in card_rows:
+                if not ab_ids_str: continue
+                for segment in ab_ids_str.split(','):
+                    segment = segment.strip()
+                    if ':' in segment:
+                        parts = segment.split(':', 1)
+                        if len(parts) == 2:
+                            try:
+                                a_id = int(parts[0].strip())
+                                b_id = parts[1].strip()
+                                
+                                if a_id in redirect_check_ability_ids:
+                                    target_loc_ids.add(str(b_id))
+                                    found_redirects += 1
+                            except ValueError:
+                                pass
+
+        if not target_loc_ids:
+            log_callback("    - 수정할 텍스트 ID를 찾지 못했습니다.")
+            return
+
+        # 5. 최종 수정 실행
+        placeholders = ', '.join('?' * len(target_loc_ids))
+        query = f"SELECT LocId, Loc, Formatted FROM Localizations_koKR WHERE LocId IN ({placeholders})"
+        cursor.execute(query, list(target_loc_ids))
+
+        updates = []
+        
+        target_nfc = "소실"
+        replace_nfc = "사라짐"
+        target_nfd = unicodedata.normalize('NFD', target_nfc)
+        replace_nfd = unicodedata.normalize('NFD', replace_nfc)
+
+        for loc_id, loc_text, formatted in cursor.fetchall():
+            new_text = loc_text
+            
+            if formatted == 2:
+                if target_nfd in loc_text:
+                    new_text = loc_text.replace(target_nfd, replace_nfd)
+            else:
+                if target_nfc in loc_text:
+                    new_text = loc_text.replace(target_nfc, replace_nfc)
+
+            if new_text != loc_text:
+                updates.append((new_text, loc_id, formatted))
+
+        if updates:
+            cursor.executemany("UPDATE Localizations_koKR SET Loc = ? WHERE LocId = ? AND Formatted = ?", updates)
+            conn.commit()
+            log_callback(f"  - 총 {len(updates)}개 항목에서 '소실'을 '사라짐'으로 변경했습니다.")
+        else:
+            log_callback("  - 변경할 '소실' 텍스트가 없거나 이미 패치되었습니다.")
+
+    except sqlite3.Error as e:
+        log_callback(f"    - '소실' 패치 중 데이터베이스 오류 발생: {e}")
+    finally:
+        if conn: conn.close()
+
+def patch_sneak_keyword(log_callback):
+    log_callback("  - '기습' -> '암습' 키워드 패치 시작...")
+    db_files = glob.glob(os.path.join(application_path, 'Raw_CardDatabase_*.mtga'))
+    if not db_files:
+        log_callback("    - 카드 데이터베이스를 찾을 수 없어 건너뜁니다.")
+        return
+
+    db_path = db_files[0]
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # 1. 394 관련 Ability 조회 (Id와 TextId)
+        cursor.execute("SELECT Id, TextId FROM Abilities WHERE Id = 394 OR BaseId = 394 OR ReferencedAbilityIds = 394")
+        ability_rows = cursor.fetchall()
+        
+        
+        if not ability_rows:
+            log_callback("    - '기습' 관련 능력을 찾지 못했습니다.")
+            return
+
+        target_loc_ids = set()
+        redirect_check_ability_ids = set() # #NoTranslationNeeded 인 AbilityId들
+
+        # 2. TextId 수집
+        text_ids_to_check = {str(row[1]) for row in ability_rows if row[1]}
+        
+        loc_lookup = {}
+        if text_ids_to_check:
+            placeholders = ', '.join('?' * len(text_ids_to_check))
+            # Formatted 조건 없이 모든 관련 텍스트 조회 (디버깅 및 누락 방지)
+            cursor.execute(f"SELECT LocId, Loc FROM Localizations_koKR WHERE LocId IN ({placeholders})", list(text_ids_to_check))
+            
+            rows = cursor.fetchall()
+
+            for row in rows:
+                loc_id = str(row[0])
+                loc_text = row[1]
+                # 이미 저장된 값이 없거나, 현재 값이 #NoTranslationNeeded라면 덮어씀 (우선순위 부여)
+                if loc_id not in loc_lookup or loc_text == "#NoTranslationNeeded":
+                    loc_lookup[loc_id] = loc_text
+
+        # 3. 분류: 일반 수정 vs 리다이렉트 필요
+        for ab_id, text_id in ability_rows:
+            if not text_id: continue
+            
+            val = loc_lookup.get(str(text_id))
+            if val == "#NoTranslationNeeded":
+                # 3-1. #NoTranslationNeeded 인 경우 -> 리다이렉트 목록(AbilityId)에 추가
+                redirect_check_ability_ids.add(ab_id)
+            elif val:
+                # 3-2. 일반 텍스트인 경우 -> 수정 대상(TextId)에 바로 추가
+                target_loc_ids.add(str(text_id))
+            else:
+                # DB에 없는 경우 로그 남김
+                # log_callback(f"    [DEBUG] TextId {text_id} not found in koKR DB.")
+                pass
+
+
+        # 4. 리다이렉트 처리 (Cards 테이블 스캔)
+        if redirect_check_ability_ids:
+            cursor.execute("SELECT AbilityIds FROM Cards WHERE AbilityIds IS NOT NULL AND AbilityIds LIKE '%:%'")
+            
+            card_rows = cursor.fetchall()
+            found_redirects = 0
+            
+            for (ab_ids_str,) in card_rows:
+                if not ab_ids_str: continue
+                # AbilityIds 포맷 예: "123, 394:99999, 456"
+                for segment in ab_ids_str.split(','):
+                    segment = segment.strip()
+                    if ':' in segment:
+                        parts = segment.split(':', 1)
+                        if len(parts) == 2:
+                            try:
+                                a_id = int(parts[0].strip()) # AbilityId
+                                b_id = parts[1].strip()      # New Target LocId
+                                
+                                # A 자리에 있는 값이 리다이렉트 대상 AbilityId라면 B 값을 타겟으로 추가
+                                if a_id in redirect_check_ability_ids:
+                                    target_loc_ids.add(str(b_id))
+                                    found_redirects += 1
+                            except ValueError:
+                                pass
+
+        if not target_loc_ids:
+            log_callback("    - 수정할 텍스트 ID를 찾지 못했습니다.")
+            return
+
+        # 5. 최종 수정 실행 (Formatted 0, 1, 2 모두 처리)
+        placeholders = ', '.join('?' * len(target_loc_ids))
+        query = f"SELECT LocId, Loc, Formatted FROM Localizations_koKR WHERE LocId IN ({placeholders})"
+        cursor.execute(query, list(target_loc_ids))
+
+        updates = []
+        
+        # 검색어 (NFC)
+        target_nfc = "기습"
+        replace_nfc = "암습"
+        # 검색어 (NFD) - Formatted=2 용
+        target_nfd = unicodedata.normalize('NFD', target_nfc)
+        replace_nfd = unicodedata.normalize('NFD', replace_nfc)
+
+        for loc_id, loc_text, formatted in cursor.fetchall():
+            new_text = loc_text
+            
+            if formatted == 2:
+                # Formatted=2 (NFD) 처리
+                if target_nfd in loc_text:
+                    new_text = loc_text.replace(target_nfd, replace_nfd)
+            else:
+                # Formatted=0, 1 (NFC) 처리
+                if target_nfc in loc_text:
+                    new_text = loc_text.replace(target_nfc, replace_nfc)
+
+            if new_text != loc_text:
+                updates.append((new_text, loc_id, formatted))
+
+        if updates:
+            cursor.executemany("UPDATE Localizations_koKR SET Loc = ? WHERE LocId = ? AND Formatted = ?", updates)
+            conn.commit()
+            log_callback(f"  - 총 {len(updates)}개 항목에서 '기습'을 '암습'으로 변경했습니다.")
+        else:
+            log_callback("  - 변경할 '기습' 텍스트가 없거나 이미 패치되었습니다.")
+
+    except sqlite3.Error as e:
+        log_callback(f"    - '기습' 패치 중 데이터베이스 오류 발생: {e}")
+    finally:
+        if conn: conn.close()
 
 def patch_seek_keyword(log_callback):
     log_callback("  - 'SEEK' 키워드 자동 번역 패치 시작...")
