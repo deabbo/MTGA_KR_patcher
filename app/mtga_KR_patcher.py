@@ -24,6 +24,7 @@ __version__ = "1.6"
 VERSION_CHECK_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/version.json"
 SCRIPT_UPDATE_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/app/mtga_KR_patcher.py"
 
+
 def check_for_updates():
     """Checks for a new version of the script and prompts the user to update."""
     try:
