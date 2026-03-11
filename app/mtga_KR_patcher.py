@@ -19,7 +19,7 @@ from PySide6.QtCore import QObject, Signal, QThread, QTimer
 from PySide6.QtGui import QTextCursor
 
 # --- Auto-Update Logic ---
-__version__ = "1.6"
+__version__ = "1.6.1"
 # NOTE: These URLs point to the raw files in the main branch of the GitHub repository.
 VERSION_CHECK_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/version.json"
 SCRIPT_UPDATE_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/app/mtga_KR_patcher.py"
@@ -513,8 +513,14 @@ def run_english_name_patch(log_callback):
         cursor = conn.cursor()
 
         # 1. Get all LocIds that are purely card titles from the Cards table's titleId column, excluding tokens.
+        # Also exclude IDs that are used for abilities with Category = 3 as requested.
         log_callback("  - 카드 테이블에서 순수 카드 제목 ID를 수집하는 중 (토큰 제외)...")
-        cursor.execute("SELECT DISTINCT titleId FROM Cards WHERE titleId IS NOT NULL AND isToken = 0")
+        query = """
+            SELECT DISTINCT titleId FROM Cards 
+            WHERE titleId IS NOT NULL AND isToken = 0
+            AND titleId NOT IN (SELECT TextId FROM Abilities WHERE Category = 3 AND TextId IS NOT NULL)
+        """
+        cursor.execute(query)
         card_title_ids = {str(row[0]) for row in cursor.fetchall()}
         
         if not card_title_ids:
@@ -579,7 +585,7 @@ def replace_sleeve_art(sleeve_bucket_id, image_content, log_callback):
     found_files = glob.glob(asset_bundle_pattern)
     
     if not found_files:
-        log_callback(f"  - 정보: 슬리브 에셋 '{sleeve_bucket_id}'을(를) 찾을 수 없습니다. 건너킵니다.")
+        log_callback(f"  - 정보: 슬리브 에셋 '{sleeve_bucket_id}'을(를) 찾을 수 없습니다. 건너뜁니다.")
         return False
 
     if len(found_files) > 1:
@@ -693,12 +699,12 @@ def run_image_change(log_callback, name_option, script_base_path):
     
     # --- Define sleeve data map ---
     sleeve_data_map = {
-        "461218": {"bucket_id": "Textures_Bucket_Card.Sleeve_1096", "key": "MainNav/DeckBuilder/Sleeves/CardBack_OM1_461218", "exp_code": "OM1"},
-        "461290": {"bucket_id": "Textures_Bucket_Card.Sleeve_1099", "key": "MainNav/DeckBuilder/Sleeves/CardBack_OM1_461290", "exp_code": "OM1"},
-        "461308": {"bucket_id": "Textures_Bucket_Card.Sleeve_1101", "key": "MainNav/DeckBuilder/Sleeves/CardBack_OM1_461308", "exp_code": "OM1"},
-        "461311": {"bucket_id": "Textures_Bucket_Card.Sleeve_1102", "key": "MainNav/DeckBuilder/Sleeves/CardBack_OM1_461311", "exp_code": "OM1"},
-        "461328": {"bucket_id": "Textures_Bucket_Card.Sleeve_1103", "key": "MainNav/DeckBuilder/Sleeves/CardBack_OM1_461328", "exp_code": "OM1"},
-        "461338": {"bucket_id": "Textures_Bucket_Card.Sleeve_1105", "key": "MainNav/DeckBuilder/Sleeves/CardBack_OM1_461338", "exp_code": "OM1"},
+        "461218": {"bucket_id": "Textures_Bucket_Card.Sleeve_1103", "key": "MainNav/DeckBuilder/Sleeves/CardBack_OM1_461218", "exp_code": "OM1"},
+        "461290": {"bucket_id": "Textures_Bucket_Card.Sleeve_1106", "key": "MainNav/DeckBuilder/Sleeves/CardBack_OM1_461290", "exp_code": "OM1"},
+        "461308": {"bucket_id": "Textures_Bucket_Card.Sleeve_1108", "key": "MainNav/DeckBuilder/Sleeves/CardBack_OM1_461308", "exp_code": "OM1"},
+        "461311": {"bucket_id": "Textures_Bucket_Card.Sleeve_1109", "key": "MainNav/DeckBuilder/Sleeves/CardBack_OM1_461311", "exp_code": "OM1"},
+        "461328": {"bucket_id": "Textures_Bucket_Card.Sleeve_1110", "key": "MainNav/DeckBuilder/Sleeves/CardBack_OM1_461328", "exp_code": "OM1"},
+        "461338": {"bucket_id": "Textures_Bucket_Card.Sleeve_1112", "key": "MainNav/DeckBuilder/Sleeves/CardBack_OM1_461338", "exp_code": "OM1"},
     }
 
     # --- Collect all art_ids for both cards and sleeves ---
