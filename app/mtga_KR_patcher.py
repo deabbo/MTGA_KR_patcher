@@ -19,7 +19,7 @@ from PySide6.QtCore import QObject, Signal, QThread, QTimer
 from PySide6.QtGui import QTextCursor
 
 # --- Auto-Update Logic ---
-__version__ = "1.6.1"
+__version__ = "1.6.2"
 # NOTE: These URLs point to the raw files in the main branch of the GitHub repository.
 VERSION_CHECK_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/version.json"
 SCRIPT_UPDATE_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/app/mtga_KR_patcher.py"
@@ -1069,7 +1069,7 @@ def run_localization_patch(log_callback):
     # 2. 카드 오역 수정
     patch_card_text(log_callback, "https://docs.google.com/uc?export=download&id=1pSF_YCV0NPuy240Rtt0bzOmr1GyE5HMd&confirm=t")
     
-    patch_seek_keyword(log_callback)
+    # patch_seek_keyword(log_callback) 더이상 사용하지 않음 
     patch_sneak_keyword(log_callback)
     patch_vanishing_keyword(log_callback)
     log_callback("=== 한글 오역 패치 완료 ===")
@@ -1293,7 +1293,7 @@ def patch_sneak_keyword(log_callback):
         
         # 검색어 (NFC)
         target_nfc = "기습"
-        replace_nfc = "암습"
+        replace_nfc = "잠행"
         # 검색어 (NFD) - Formatted=2 용
         target_nfd = unicodedata.normalize('NFD', target_nfc)
         replace_nfd = unicodedata.normalize('NFD', replace_nfc)
@@ -1316,142 +1316,144 @@ def patch_sneak_keyword(log_callback):
         if updates:
             cursor.executemany("UPDATE Localizations_koKR SET Loc = ? WHERE LocId = ? AND Formatted = ?", updates)
             conn.commit()
-            log_callback(f"  - 총 {len(updates)}개 항목에서 '기습'을 '암습'으로 변경했습니다.")
+            log_callback(f"  - 총 {len(updates)}개 항목에서 '기습(Sneak)'을 '잠행'으로 변경했습니다.")
         else:
-            log_callback("  - 변경할 '기습' 텍스트가 없거나 이미 패치되었습니다.")
+            log_callback("  - 변경할 '기습(Sneak)' 텍스트가 없거나 이미 패치되었습니다.")
 
     except sqlite3.Error as e:
-        log_callback(f"    - '기습' 패치 중 데이터베이스 오류 발생: {e}")
+        log_callback(f"    - '기습(Sneak)' 패치 중 데이터베이스 오류 발생: {e}")
     finally:
         if conn: conn.close()
 
-def patch_seek_keyword(log_callback):
-    log_callback("  - 'SEEK' 키워드 자동 번역 패치 시작...")
-    db_files = glob.glob(os.path.join(application_path, 'Raw_CardDatabase_*.mtga'))
-    if not db_files:
-        log_callback("    - 카드 데이터베이스를 찾을 수 없어 건너뜁니다.")
-        return
 
-    db_path = db_files[0]
-    conn = None
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+# 아레나 패치로 인해 더이상 사용하지 않음 
+# def patch_seek_keyword(log_callback):
+#     log_callback("  - 'SEEK' 키워드 자동 번역 패치 시작...")
+#     db_files = glob.glob(os.path.join(application_path, 'Raw_CardDatabase_*.mtga'))
+#     if not db_files:
+#         log_callback("    - 카드 데이터베이스를 찾을 수 없어 건너뜁니다.")
+#         return
 
-        # Step 1: Get all LocIds for abilities of cards in 'Y' expansions.
-        cursor.execute("SELECT AbilityIds, HiddenAbilityIds FROM Cards WHERE ExpansionCode LIKE 'Y%'" )
-        rows = cursor.fetchall()
+#     db_path = db_files[0]
+#     conn = None
+#     try:
+#         conn = sqlite3.connect(db_path)
+#         cursor = conn.cursor()
+
+#         # Step 1: Get all LocIds for abilities of cards in 'Y' expansions.
+#         cursor.execute("SELECT AbilityIds, HiddenAbilityIds FROM Cards WHERE ExpansionCode LIKE 'Y%'" )
+#         rows = cursor.fetchall()
         
-        all_ability_ids = set()
-        direct_loc_ids = set()
+#         all_ability_ids = set()
+#         direct_loc_ids = set()
 
-        for ability_ids_str, hidden_ability_ids_str in rows:
-            for id_part in ((ability_ids_str or '') + ',' + (hidden_ability_ids_str or '')).split(','):
-                id_part = id_part.strip()
-                if not id_part: continue
-                if ':' in id_part:
-                    direct_loc_ids.add(id_part.split(':', 1)[1].strip())
-                else:
-                    all_ability_ids.add(id_part)
+#         for ability_ids_str, hidden_ability_ids_str in rows:
+#             for id_part in ((ability_ids_str or '') + ',' + (hidden_ability_ids_str or '')).split(','):
+#                 id_part = id_part.strip()
+#                 if not id_part: continue
+#                 if ':' in id_part:
+#                     direct_loc_ids.add(id_part.split(':', 1)[1].strip())
+#                 else:
+#                     all_ability_ids.add(id_part)
         
-        if all_ability_ids:
-            placeholders = ', '.join('?' * len(all_ability_ids))
-            cursor.execute(f"SELECT DISTINCT TextId FROM Abilities WHERE Id IN ({placeholders}) AND TextId != 0", list(all_ability_ids))
-            for r in cursor.fetchall():
-                direct_loc_ids.add(str(r[0]))
+#         if all_ability_ids:
+#             placeholders = ', '.join('?' * len(all_ability_ids))
+#             cursor.execute(f"SELECT DISTINCT TextId FROM Abilities WHERE Id IN ({placeholders}) AND TextId != 0", list(all_ability_ids))
+#             for r in cursor.fetchall():
+#                 direct_loc_ids.add(str(r[0]))
 
-        if not direct_loc_ids:
-            log_callback("    - 'Y' 확장팩에서 처리할 능력 텍스트를 찾지 못했습니다.")
-            return
+#         if not direct_loc_ids:
+#             log_callback("    - 'Y' 확장팩에서 처리할 능력 텍스트를 찾지 못했습니다.")
+#             return
 
-        # Step 2: Get English texts for all candidate LocIds to determine which ones to process
-        placeholders = ', '.join('?' * len(direct_loc_ids))
-        cursor.execute(f"SELECT LocId, Loc FROM Localizations_enUS WHERE LocId IN ({placeholders}) AND (Loc LIKE '%SEEK%' OR Loc LIKE '%Discover%')", list(direct_loc_ids))
+#         # Step 2: Get English texts for all candidate LocIds to determine which ones to process
+#         placeholders = ', '.join('?' * len(direct_loc_ids))
+#         cursor.execute(f"SELECT LocId, Loc FROM Localizations_enUS WHERE LocId IN ({placeholders}) AND (Loc LIKE '%SEEK%' OR Loc LIKE '%Discover%')", list(direct_loc_ids))
         
-        en_texts_to_process = {str(loc_id): loc_text for loc_id, loc_text in cursor.fetchall()}
+#         en_texts_to_process = {str(loc_id): loc_text for loc_id, loc_text in cursor.fetchall()}
         
-        # Filter for LocIds that actually contain SEEK
-        loc_ids_with_seek = {loc_id for loc_id, en_text in en_texts_to_process.items() if "SEEK" in en_text}
+#         # Filter for LocIds that actually contain SEEK
+#         loc_ids_with_seek = {loc_id for loc_id, en_text in en_texts_to_process.items() if "SEEK" in en_text}
 
-        if not loc_ids_with_seek:
-            log_callback("    - 'SEEK' 오역이 처리되었거나 없습니다.")
-            return
+#         if not loc_ids_with_seek:
+#             log_callback("    - 'SEEK' 오역이 처리되었거나 없습니다.")
+#             return
 
-        # Step 3: For the LocIds that need changes, fetch ALL their Korean localizations.
-        placeholders_ko = ', '.join('?' * len(loc_ids_with_seek))
-        cursor.execute(f"SELECT LocId, Loc, Formatted FROM Localizations_koKR WHERE LocId IN ({placeholders_ko})", list(loc_ids_with_seek))
+#         # Step 3: For the LocIds that need changes, fetch ALL their Korean localizations.
+#         placeholders_ko = ', '.join('?' * len(loc_ids_with_seek))
+#         cursor.execute(f"SELECT LocId, Loc, Formatted FROM Localizations_koKR WHERE LocId IN ({placeholders_ko})", list(loc_ids_with_seek))
         
-        ko_texts_to_process = cursor.fetchall()
-        updates_ko = []
+#         ko_texts_to_process = cursor.fetchall()
+#         updates_ko = []
         
-        for loc_id, ko_text, formatted in ko_texts_to_process:
-            loc_id_str = str(loc_id)
-            en_text = en_texts_to_process.get(loc_id_str)
-            if not en_text: continue
+#         for loc_id, ko_text, formatted in ko_texts_to_process:
+#             loc_id_str = str(loc_id)
+#             en_text = en_texts_to_process.get(loc_id_str)
+#             if not en_text: continue
 
-            # --- Idempotent Logic Starts Here ---
+#             # --- Idempotent Logic Starts Here ---
             
-            # 1. Determine target state from English text
-            target_discover_count = en_text.count("Discover")
-            target_seek_count = en_text.count("SEEK")
+#             # 1. Determine target state from English text
+#             target_discover_count = en_text.count("Discover")
+#             target_seek_count = en_text.count("SEEK")
 
-            if target_seek_count == 0:
-                continue
+#             if target_seek_count == 0:
+#                 continue
 
-            # 2. Determine current state from Korean text
-            current_discover_count = ko_text.count('발견')
-            current_seek_count = ko_text.count('탐색')
+#             # 2. Determine current state from Korean text
+#             current_discover_count = ko_text.count('발견')
+#             current_seek_count = ko_text.count('탐색')
 
-            # 3. Idempotency Check: If the text is already in the correct state, skip.
-            if current_discover_count == target_discover_count and current_seek_count == target_seek_count:
-                continue
+#             # 3. Idempotency Check: If the text is already in the correct state, skip.
+#             if current_discover_count == target_discover_count and current_seek_count == target_seek_count:
+#                 continue
 
-            # 4. Revert to a predictable "untouched" state for processing
-            ko_reverted = ko_text.replace('탐색', '발견')
+#             # 4. Revert to a predictable "untouched" state for processing
+#             ko_reverted = ko_text.replace('탐색', '발견')
 
-            new_ko_text = ko_reverted
+#             new_ko_text = ko_reverted
 
-            # 5. Apply the transformation logic from the reverted state
-            if target_discover_count > 0 and target_seek_count > 0:
-                discover_pos = en_text.find("Discover")
-                seek_pos = en_text.find("SEEK")
+#             # 5. Apply the transformation logic from the reverted state
+#             if target_discover_count > 0 and target_seek_count > 0:
+#                 discover_pos = en_text.find("Discover")
+#                 seek_pos = en_text.find("SEEK")
                 
-                expected_발견_count = target_discover_count + target_seek_count
-                if ko_reverted.count('발견') < expected_발견_count:
-                    continue
+#                 expected_발견_count = target_discover_count + target_seek_count
+#                 if ko_reverted.count('발견') < expected_발견_count:
+#                     continue
 
-                if discover_pos < seek_pos:
-                    # Order: Discover, then SEEK.
-                    # Replace the Nth '발견' that corresponds to SEEK.
-                    nth_occurrence = target_discover_count
+#                 if discover_pos < seek_pos:
+#                     # Order: Discover, then SEEK.
+#                     # Replace the Nth '발견' that corresponds to SEEK.
+#                     nth_occurrence = target_discover_count
                     
-                    matches = list(re.finditer('발견', ko_reverted))
-                    if len(matches) > nth_occurrence:
-                        match_to_replace = matches[nth_occurrence]
-                        start_pos = match_to_replace.start()
-                        new_ko_text = ko_reverted[:start_pos] + '탐색' + ko_reverted[start_pos + len('발견'):]
-                    else:
-                         continue
-                else: # seek_pos < discover_pos
-                    # Order: SEEK, then Discover. Replace the first N '발견's with '탐색'.
-                    new_ko_text = ko_reverted.replace('발견', '탐색', target_seek_count)
-            elif target_seek_count > 0:
-                new_ko_text = ko_reverted.replace('발견', '탐색')
+#                     matches = list(re.finditer('발견', ko_reverted))
+#                     if len(matches) > nth_occurrence:
+#                         match_to_replace = matches[nth_occurrence]
+#                         start_pos = match_to_replace.start()
+#                         new_ko_text = ko_reverted[:start_pos] + '탐색' + ko_reverted[start_pos + len('발견'):]
+#                     else:
+#                          continue
+#                 else: # seek_pos < discover_pos
+#                     # Order: SEEK, then Discover. Replace the first N '발견's with '탐색'.
+#                     new_ko_text = ko_reverted.replace('발견', '탐색', target_seek_count)
+#             elif target_seek_count > 0:
+#                 new_ko_text = ko_reverted.replace('발견', '탐색')
             
-            if new_ko_text != ko_text:
-                final_text = formatting_for_2(new_ko_text) if formatted == 2 else new_ko_text
-                updates_ko.append((final_text, loc_id, formatted))
+#             if new_ko_text != ko_text:
+#                 final_text = formatting_for_2(new_ko_text) if formatted == 2 else new_ko_text
+#                 updates_ko.append((final_text, loc_id, formatted))
         
-        if updates_ko:
-            cursor.executemany("UPDATE Localizations_koKR SET Loc = ? WHERE LocId = ? AND Formatted = ?", updates_ko)
-            conn.commit()
+#         if updates_ko:
+#             cursor.executemany("UPDATE Localizations_koKR SET Loc = ? WHERE LocId = ? AND Formatted = ?", updates_ko)
+#             conn.commit()
 
-        log_callback(f"  - 총 {len(updates_ko)}개 레코드에서 'SEEK'를 '탐색'으로 변경했습니다.")
+#         log_callback(f"  - 총 {len(updates_ko)}개 레코드에서 'SEEK'를 '탐색'으로 변경했습니다.")
 
-    except sqlite3.Error as e:
-        log_callback(f"    - 'SEEK' 패치 중 데이터베이스 오류 발생: {e}")
-    finally:
-        if conn: conn.close()
+#     except sqlite3.Error as e:
+#         log_callback(f"    - 'SEEK' 패치 중 데이터베이스 오류 발생: {e}")
+#     finally:
+#         if conn: conn.close()
 
 # --- GUI Application using PySide6 ---
 
