@@ -1,0 +1,44 @@
+name: Build and Upload Mac Release
+
+# 깃허브에서 새로운 Release가 '발행(published)'되었을 때 이 작업이 실행됩니다.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write # 릴리즈 페이지에 파일을 업로드하기 위한 권한 설정
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller PySide6 requests
+
+    - name: Build with PyInstaller
+      run: |
+        # ※ mtga_KR_patcher.py 의 위치가 하위 폴더에 있다면 경로를 수정해주세요 (예: app/mtga_KR_patcher.py)
+        pyinstaller --noconfirm --windowed --target-arch universal2 app/mtga_KR_patcher.py
+
+    - name: Zip the Application
+      run: |
+        cd dist
+        zip -r mtga_KR_patcher_mac.zip mtga_KR_patcher.app
+
+    - name: Upload Zip to Release Assets
+      uses: softprops/action-gh-release@v2
+      with:
+        files: dist/mtga_KR_patcher_mac.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

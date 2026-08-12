@@ -1,3 +1,4 @@
+import platform
 import sqlite3
 import glob
 import os
@@ -10,6 +11,8 @@ import re
 import concurrent.futures
 import traceback
 import json
+import platform  
+import subprocess 
 
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, 
@@ -19,18 +22,21 @@ from PySide6.QtCore import QObject, Signal, QThread, QTimer
 from PySide6.QtGui import QTextCursor
 
 # --- Auto-Update Logic ---
-__version__ = "1.7.0"
+__version__ = "1.8.0"
 # NOTE: 이 URL들은 GitHub 저장소의 메인 브랜치에 있는 원본 파일을 가리킵니다.
 VERSION_CHECK_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/version.json"
 SCRIPT_UPDATE_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/app/mtga_KR_patcher.py"
 
-# ★ [중요] 빌드된 최신 .exe 파일을 직접 다운로드할 수 있는 직링크 URL을 입력해주세요.
-# 예시: 깃허브 Releases 탭의 최신 에셋 다운로드 주소
-EXE_UPDATE_URL = "https://github.com/deabbo/MTGA_KR_patcher/releases/latest/download/mtga_KR_patcher.exe"
+# OS별 업데이트 파일 URL 분기
+if platform.system() == "Windows":
+    EXE_UPDATE_URL = "https://github.com/deabbo/MTGA_KR_patcher/releases/latest/download/mtga_KR_patcher.exe"
+elif platform.system() == "Darwin":
+    # [중요] 맥용 빌드 파일(.app을 압축한 .zip 등)의 직링크 URL로 변경해야 합니다.
+    # 예시: mtga_KR_patcher_mac.zip
+    EXE_UPDATE_URL = "https://github.com/deabbo/MTGA_KR_patcher/releases/latest/download/mtga_KR_patcher_mac.zip"
 
 
 def check_for_updates():
-    """Checks for a new version of the script/executable and prompts the user to update."""
     try:
         print("Checking for updates...")
         response = requests.get(VERSION_CHECK_URL, timeout=5)
@@ -48,56 +54,77 @@ def check_for_updates():
             ret = msg_box.exec()
 
             if ret == QMessageBox.Yes:
-                import subprocess
                 is_frozen = getattr(sys, 'frozen', False)
                 
                 if is_frozen:
-                    # =========================================================================
-                    # 1. 실행 파일(.exe)로 동작 중일 때의 자동 업데이트 로직
-                    # =========================================================================
                     exe_path = os.path.abspath(sys.executable)
                     exe_dir = os.path.dirname(exe_path)
-                    new_exe_path = os.path.join(exe_dir, "mtga_KR_patcher_new.exe")
                     
-                    print(f"Downloading executable update from {EXE_UPDATE_URL}...")
-                    exe_response = requests.get(EXE_UPDATE_URL, timeout=30)
-                    exe_response.raise_for_status()
-                    
-                    # 새 실행 파일을 임시 파일 이름으로 저장
-                    with open(new_exe_path, 'wb') as f:
-                        f.write(exe_response.content)
-                    
-                    # 업데이트를 수행할 임시 배치 파일(.bat) 생성
-                    # - timeout /t 2 : 현재 프로그램이 정상 종료되어 파일 락(Lock)이 해제될 때까지 2초 대기
-                    # - del /f /q    : 구버전 실행 파일 강제 삭제
-                    # - move /y      : 다운로드된 새 실행 파일을 원본 이름으로 변경
-                    # - start ""     : 새 프로그램 실행
-                    # - del "%~f0"   : 배치 파일 자신을 스스로 삭제
-                    bat_path = os.path.join(exe_dir, "update.bat")
-                    bat_content = f"""@echo off
+                    if platform.system() == "Windows":
+                        # === 윈도우 전용 업데이트 로직 ===[cite: 1]
+                        new_exe_path = os.path.join(exe_dir, "mtga_KR_patcher_new.exe")
+                        
+                        print(f"Downloading executable update from {EXE_UPDATE_URL}...")
+                        exe_response = requests.get(EXE_UPDATE_URL, timeout=30)
+                        exe_response.raise_for_status()
+                        
+                        with open(new_exe_path, 'wb') as f:
+                            f.write(exe_response.content)
+                        
+                        bat_path = os.path.join(exe_dir, "update.bat")
+                        bat_content = f"""@echo off
 timeout /t 2 /nobreak > nul
 if exist "{exe_path}" del /f /q "{exe_path}"
 if exist "{new_exe_path}" move /y "{new_exe_path}" "{exe_path}"
 start "" "{exe_path}"
 del "%~f0"
 """
-                    # 한국어 윈도우 환경 및 한글 경로 인식을 위해 cp949 코덱으로 저장
-                    with open(bat_path, "w", encoding="cp949") as f:
-                        f.write(bat_content)
-                    
-                    QMessageBox.information(None, "업데이트 준비 완료", "프로그램이 종료된 후 최신 버전으로 자동 교체 및 재실행됩니다.")
-                    
-                    # 검은색 cmd 창이 표시되지 않도록 백그라운드로 배치 파일 실행
-                    CREATE_NO_WINDOW = 0x08000000
-                    subprocess.Popen([bat_path], shell=True, creationflags=CREATE_NO_WINDOW)
-                    
-                    # 현재 프로그램 즉시 안전 종료 (파일 락 해제 목적)
-                    sys.exit(0)
-                    
+                        with open(bat_path, "w", encoding="cp949") as f: #[cite: 1]
+                            f.write(bat_content)
+                        
+                        QMessageBox.information(None, "업데이트 준비 완료", "프로그램이 종료된 후 최신 버전으로 자동 교체 및 재실행됩니다.")
+                        
+                        CREATE_NO_WINDOW = 0x08000000 #[cite: 1]
+                        subprocess.Popen([bat_path], shell=True, creationflags=CREATE_NO_WINDOW) #[cite: 1]
+                        sys.exit(0)
+                        
+                    elif platform.system() == "Darwin":
+                        # === 맥(macOS) 전용 업데이트 로직 ===
+                        # 맥 환경에서는 앱 번들(.app) 구조를 가지므로, sys.executable의 상위 경로인 .app 자체를 교체해야 합니다.
+                        app_path = exe_path.split('.app/')[0] + '.app' if '.app/' in exe_path else exe_path
+                        app_dir = os.path.dirname(app_path)
+                        zip_path = os.path.join(app_dir, "update.zip")
+                        
+                        print(f"Downloading Mac update from {EXE_UPDATE_URL}...")
+                        exe_response = requests.get(EXE_UPDATE_URL, timeout=30)
+                        exe_response.raise_for_status()
+                        
+                        with open(zip_path, 'wb') as f:
+                            f.write(exe_response.content)
+                            
+                        # 맥용 쉘 스크립트 작성 (.sh)
+                        sh_path = os.path.join(app_dir, "update.sh")
+                        sh_content = f"""#!/bin/bash
+                        sleep 2
+                        rm -rf "{app_path}"
+                        unzip -q "{zip_path}" -d "{app_dir}"
+                        open "{app_path}"
+                        rm "{zip_path}"
+                        rm "$0"
+                        """
+                        with open(sh_path, "w", encoding="utf-8") as f:
+                            f.write(sh_content)
+                        
+                        # 스크립트 실행 권한 부여
+                        os.chmod(sh_path, 0o755)
+                        
+                        QMessageBox.information(None, "업데이트 준비 완료", "프로그램이 종료된 후 최신 버전으로 자동 교체 및 재실행됩니다.")
+                        
+                        subprocess.Popen([sh_path], shell=True)
+                        sys.exit(0)
+
                 else:
-                    # =========================================================================
-                    # 2. .py 소스코드 스크립트 상태로 동작 중일 때의 기존 업데이트 로직
-                    # =========================================================================
+                    # 소스코드(.py) 상태일 때의 업데이트[cite: 1]
                     print(f"Downloading update from {SCRIPT_UPDATE_URL}...")
                     script_response = requests.get(SCRIPT_UPDATE_URL, timeout=15)
                     script_response.raise_for_status()
@@ -123,8 +150,18 @@ def find_and_set_mtga_path(log_callback):
     global application_path
     log_callback("MTG 아레나 설치 경로를 찾는 중...")
     try:
-        log_file_path = os.path.join(os.getenv('APPDATA'), '..', 'LocalLow', 'Wizards Of The Coast', 'MTGA', 'Player.log')
+        # OS별 Player.log 기본 위치 탐색
+        if platform.system() == "Windows":
+            # 기존 윈도우 경로[cite: 1]
+            log_file_path = os.path.join(os.getenv('APPDATA'), '..', 'LocalLow', 'Wizards Of The Coast', 'MTGA', 'Player.log')
+        elif platform.system() == "Darwin":
+            # 맥(macOS) 경로
+            log_file_path = os.path.expanduser('~/Library/Logs/Wizards Of The Coast/MTGA/Player.log')
+        else:
+            log_file_path = ""
+            
         log_file_path = os.path.normpath(log_file_path)
+        
         if os.path.exists(log_file_path):
             with open(log_file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
