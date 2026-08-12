@@ -36,6 +36,7 @@ elif platform.system() == "Darwin":
     EXE_UPDATE_URL = "https://github.com/deabbo/MTGA_KR_patcher/releases/latest/download/mtga_KR_patcher_mac.zip"
 
 
+
 def check_for_updates():
     try:
         print("Checking for updates...")
