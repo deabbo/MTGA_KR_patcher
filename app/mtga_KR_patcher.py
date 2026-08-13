@@ -22,7 +22,7 @@ from PySide6.QtCore import QObject, Signal, QThread, QTimer
 from PySide6.QtGui import QTextCursor
 
 # --- Auto-Update Logic ---
-__version__ = "1.8.0"
+__version__ = "1.8.1"
 # NOTE: 이 URL들은 GitHub 저장소의 메인 브랜치에 있는 원본 파일을 가리킵니다.
 VERSION_CHECK_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/version.json"
 SCRIPT_UPDATE_URL = "https://raw.githubusercontent.com/deabbo/MTGA_KR_patcher/main/app/mtga_KR_patcher.py"
@@ -150,46 +150,62 @@ application_path = None # 패치 시작 시 동적으로 경로 설정
 def find_and_set_mtga_path(log_callback):
     global application_path
     log_callback("MTG 아레나 설치 경로를 찾는 중...")
-    try:
-        # OS별 Player.log 기본 위치 탐색
-        if platform.system() == "Windows":
-            # 기존 윈도우 경로[cite: 1]
-            log_file_path = os.path.join(os.getenv('APPDATA'), '..', 'LocalLow', 'Wizards Of The Coast', 'MTGA', 'Player.log')
-        elif platform.system() == "Darwin":
-            # 맥(macOS) 경로
-            log_file_path = os.path.expanduser('~/Library/Logs/Wizards Of The Coast/MTGA/Player.log')
-        else:
-            log_file_path = ""
-            
-        log_file_path = os.path.normpath(log_file_path)
-        
-        if os.path.exists(log_file_path):
-            with open(log_file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
-            match = re.search(r"Mono path\[0\] = '(.+?)/MTGA_Data/Managed'", content)
-            if match:
-                mtga_base_path = os.path.normpath(match.group(1))
-                raw_path = os.path.join(mtga_base_path, "MTGA_Data", "Downloads", "Raw")
-                if os.path.isdir(raw_path):
-                    log_callback(f"성공: 자동으로 경로를 찾았습니다: {raw_path}")
-                    application_path = raw_path
-                    return True
-    except Exception as e:
-        log_callback(f"오류: Player.log 분석 중 예외 발생: {e}")
-    log_callback("정보: 자동으로 경로를 찾지 못했습니다. 프로그램 위치를 기준으로 다시 시도합니다.")
+    
+    # 1. 윈도우(Windows)일 때만 Player.log 자동 탐색 실행[cite: 1]
+    if platform.system() == "Windows":
+        try:
+            log_file_path = os.path.normpath(
+                os.path.join(os.getenv('APPDATA', ''), '..', 'LocalLow', 'Wizards Of The Coast', 'MTGA', 'Player.log')
+            )
+            if os.path.exists(log_file_path):
+                with open(log_file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                match = re.search(r"Mono path\[0\] = '(.+?)/MTGA_Data/Managed'", content)
+                if match:
+                    mtga_base_path = os.path.normpath(match.group(1))
+                    raw_path = os.path.join(mtga_base_path, "MTGA_Data", "Downloads", "Raw")
+                    if os.path.isdir(raw_path):
+                        log_callback(f"성공: 자동으로 경로를 찾았습니다: {raw_path}")
+                        application_path = raw_path
+                        return True
+        except Exception as e:
+            log_callback(f"오류: Player.log 분석 중 예외 발생: {e}")
+
+    # 2. 맥(Darwin)이거나 윈도우 자동 탐색 실패 시: 앱/스크립트 위치 기준으로 DB 탐색
+    log_callback("정보: 프로그램 위치를 기준으로 카드 데이터베이스 파일(.mtga)을 찾습니다.")
+    
     if getattr(sys, 'frozen', False):
-        base_path = os.path.dirname(sys.executable)
+        exe_path = os.path.abspath(sys.executable)
+        
+        # [맥 전용 핵심 수정] .app 패키지 구조 처리
+        # exe_path 예시: /Users/.../Raw/mtga_KR_patcher.app/Contents/MacOS/mtga_KR_patcher
+        if platform.system() == "Darwin" and ".app/Contents/MacOS" in exe_path:
+            # .app 패키지 자체의 경로를 추출한 뒤, 그 .app이 들어있는 상위 폴더(Raw)를 base_path로 지정
+            app_bundle_path = exe_path.split('.app/Contents/MacOS')[0] + '.app'
+            base_path = os.path.dirname(app_bundle_path)
+        else:
+            base_path = os.path.dirname(exe_path)
     else:
         base_path = os.path.dirname(os.path.abspath(__file__))
-    paths_to_check = [base_path, os.path.dirname(base_path), os.path.dirname(os.path.dirname(base_path))]
-    for path in paths_to_check:
+
+    # 탐색할 후보 경로들 (base_path, 현재 작업 디렉터리 os.getcwd() 포함)
+    paths_to_check = [
+        base_path,
+        os.getcwd(),
+        os.path.dirname(base_path),
+        os.path.dirname(os.path.dirname(base_path))
+    ]
+
+    # 중복 경로를 제거하면서 Raw_CardDatabase_*.mtga 파일 검색
+    for path in dict.fromkeys(paths_to_check):
         abs_path = os.path.abspath(path)
         if glob.glob(os.path.join(abs_path, 'Raw_CardDatabase_*.mtga')):
-            log_callback(f"정보: 프로그램 근처 폴더에서 게임 데이터를 찾았습니다: {abs_path}")
+            log_callback(f"성공: 프로그램 근처 폴더에서 게임 데이터를 찾았습니다: {abs_path}")
             application_path = abs_path
             return True
+
     log_callback("실패: MTG 아레나 데이터 경로를 찾을 수 없습니다.")
-    log_callback("팁: 이 패쳐 폴더를 MTG 아레나 설치 폴더의 'MTGA_Data/Downloads/Raw' 폴더 안에 놓고 실행해보세요.")
+    log_callback("팁: 맥에서는 이 패쳐 앱(.app)을 'MTGA/MTGA_Data/Downloads/Raw' 폴더 안에 직접 넣고 실행해보세요.")
     return False
 
 def get_target_card_data(log_callback):
@@ -442,8 +458,8 @@ def run_localization_patch(log_callback):
 
     # 2. 카드 오역 수정
     patch_card_text(log_callback, "https://docs.google.com/uc?export=download&id=1pSF_YCV0NPuy240Rtt0bzOmr1GyE5HMd&confirm=t")
-    
-    # patch_seek_keyword(log_callback) 더이상 사용하지 않음 
+
+    patch_no_translation_needed(log_callback)
     patch_sneak_keyword(log_callback)
     patch_vanishing_keyword(log_callback)
     log_callback("=== 한글 오역 패치 완료 ===")
@@ -565,6 +581,66 @@ def patch_vanishing_keyword(log_callback):
 
     except sqlite3.Error as e:
         log_callback(f"    - '소실' 패치 중 데이터베이스 오류 발생: {e}")
+    finally:
+        if conn: conn.close()
+
+def patch_no_translation_needed(log_callback):
+    """
+    Localizations_koKR 테이블에서 '#NoTranslationNeeded'로 누락된 텍스트를
+    Localizations_enUS 테이블의 영문 원본으로 덮어씌우는 함수
+    """
+    log_callback("  - '#NoTranslationNeeded' 영문 텍스트 복구 시작...")
+    
+    # 데이터베이스 파일 검색[cite: 2]
+    db_file_pattern = os.path.join(application_path, 'Raw_CardDatabase_*.mtga') 
+    db_files = glob.glob(db_file_pattern) 
+    
+    if not db_files:
+        log_callback("    - 카드 데이터베이스를 찾을 수 없어 건너뜁니다.")
+        return
+
+    db_path = db_files[0]
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # 1. 덮어씌울 대상의 개수 파악
+        cursor.execute("SELECT COUNT(*) FROM Localizations_koKR WHERE Loc = '#NoTranslationNeeded'")
+        count = cursor.fetchone()[0]
+        
+        if count == 0:
+            log_callback("    - 변경할 '#NoTranslationNeeded' 텍스트가 없습니다.")
+            return
+            
+        log_callback(f"    - 총 {count}개의 누락된 텍스트를 영문으로 복구합니다.")
+
+        # 2. 업데이트 실행 (서브쿼리를 사용하여 enUS 테이블에서 동일한 LocId와 Formatted를 가진 Loc를 가져옴)
+        # EXISTS를 사용하여 enUS에 해당 레코드가 존재하는 경우에만 덮어쓰도록 안전장치 적용
+        update_query = """
+            UPDATE Localizations_koKR
+            SET Loc = (
+                SELECT Loc 
+                FROM Localizations_enUS 
+                WHERE Localizations_enUS.LocId = Localizations_koKR.LocId 
+                  AND Localizations_enUS.Formatted = Localizations_koKR.Formatted
+            )
+            WHERE Loc = '#NoTranslationNeeded'
+              AND EXISTS (
+                  SELECT 1 
+                  FROM Localizations_enUS 
+                  WHERE Localizations_enUS.LocId = Localizations_koKR.LocId 
+                    AND Localizations_enUS.Formatted = Localizations_koKR.Formatted
+              )
+        """
+        cursor.execute(update_query)
+        updated_count = cursor.rowcount
+        conn.commit()
+        
+        log_callback(f"  - 총 {updated_count}개 항목 복구 완료.")
+
+    except sqlite3.Error as e:
+        log_callback(f"    - 영문 복구 중 데이터베이스 오류 발생: {e}")
     finally:
         if conn: conn.close()
 
