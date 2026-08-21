@@ -5,18 +5,14 @@ import os
 import sys
 import unicodedata
 import requests
-import time
-import io
 import re
-import concurrent.futures
 import traceback
 import json
-import platform  
 import subprocess 
 
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, 
-    QCheckBox, QRadioButton, QPushButton, QTextEdit, QMessageBox
+    QCheckBox, QPushButton, QTextEdit, QMessageBox
 )
 from PySide6.QtCore import QObject, Signal, QThread, QTimer
 from PySide6.QtGui import QTextCursor
