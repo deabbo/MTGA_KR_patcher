@@ -1,23 +1,23 @@
 name: Build Android APK
 
-on: [push]
+on: [push, pull_request]
 
 jobs:
-  build:
-    runs-on: ubuntu-22.04  # Use a stable version instead of ubuntu-latest
+  build-android:
+    runs-on: ubuntu-latest  
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Build with Buildozer
-        uses: ArtemSBulgakov/buildozer-action@v2  # Update to v2
+        uses: ArtemSBulgakov/buildozer-action@v1  # Update to v2
         id: buildozer
         with:
           workdir: app
           buildozer_version: stable
           
-      - name: Upload APK
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug
+          name: package
           path: app/bin/*.apk
