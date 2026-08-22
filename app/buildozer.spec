@@ -27,6 +27,7 @@ android.permissions = INTERNET,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE
 android.api = 33
 android.minapi = 24
 android.sdk_build_tools_version = 33.0.2
+android.ndk = 25b
 
 # 빌드 시 안드로이드 SDK 라이선스 자동 동의
 android.accept_sdk_license = True
