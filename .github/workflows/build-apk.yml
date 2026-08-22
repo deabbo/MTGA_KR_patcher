@@ -7,8 +7,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Clean Buildozer environment
-        run: rm -rf .buildozer
+
         
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,6 +26,9 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install buildozer "Cython<3.0.0"
+
+      - name: Clean Buildozer environment
+        run: rm -rf .buildozer
 
       - name: Build APK with Buildozer
         run: |
