@@ -33,7 +33,7 @@ android.ndk = 25b
 android.accept_sdk_license = True
 
 # 백그라운드 서비스 미사용
-# p4a.branch = master
+p4a.branch = master
 
 [buildozer]
 # 빌드 로그 출력 수준 (2: 상세 로그)
