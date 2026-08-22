@@ -1,7 +1,7 @@
 [app]
 
 # (필수) 앱 이름 및 패키지 식별자
-title = MTGA KR Patcher_android
+title = MTGA_KR_Patcher_android
 package.name = mtgakorpatcher
 package.domain = org.deabbo
 

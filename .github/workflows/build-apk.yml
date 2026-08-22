@@ -27,6 +27,7 @@ jobs:
 
       - name: Build APK with Buildozer
         run: |
+          yes | buildozer -v android debug
           cd app
           buildozer android debug
 
