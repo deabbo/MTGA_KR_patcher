@@ -14,7 +14,7 @@ version = 1.0.0
 
 # (중요) 앱 구동에 필요한 라이브러리 목록
 # 파이썬3, Kivy, SAF 호출용 PyJnius, 네트워크 패치용 Requests 포함
-requirements = python3==3.11.8,kivy,pyjnius,requests,certifi,idna,urllib3,charset_normalizer
+requirements = hostpython3==3.11.8,python3==3.11.8,kivy,pyjnius,requests,certifi,idna,urllib3,charset_normalizer
 
 # 앱 화면 방향 (portrait: 세로, landscape: 가로, all: 모두)
 orientation = portrait
