@@ -24,7 +24,7 @@ jobs:
 
       - name: Install Buildozer & Cython
         run: |
-          pip install --upgrade pip
+          pip install --upgrade pip virtualenv setuptools
           pip install buildozer "Cython<3.0.0"
 
       - name: Clean Buildozer environment
