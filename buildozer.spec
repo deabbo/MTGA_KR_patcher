@@ -6,7 +6,7 @@ package.name = mtgakorpatcher
 package.domain = org.deabbo
 
 # (필수) 소스코드 위치 및 포함할 파일 확장자
-source.dir = .
+source.dir = app
 source.include_exts = py,png,jpg,kv,atlas,json
 
 # 앱 버전

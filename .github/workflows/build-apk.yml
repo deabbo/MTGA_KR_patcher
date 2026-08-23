@@ -12,6 +12,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Clean Buildozer environment
+        run: rm -rf .buildozer
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -27,12 +30,8 @@ jobs:
           pip install --upgrade pip virtualenv setuptools
           pip install buildozer "Cython<3.0.0"
 
-      - name: Clean Buildozer environment
-        run: rm -rf .buildozer
-
       - name: Build APK with Buildozer
         run: |
-          cd app
           yes | buildozer -v android debug
 
       - name: Upload APK
