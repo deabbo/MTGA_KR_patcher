@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Mtgakrpatcher">
+
+
+
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+        <service
+            android:name=".UserServiceImpl"
+            android:exported="false" />
+
+
+        <receiver
+            android:name=".PairingCodeReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.deabbo.mtgakrpatcher.ACTION_SUBMIT_PAIRING_CODE" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".PairingCancelReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.deabbo.mtgakrpatcher.ACTION_CANCEL_PAIRING_SEARCH" />
+            </intent-filter>
+        </receiver>
+
+
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".PairingActivity"
+            android:exported="false"
+            android:label="무선 디버깅 연결" />
+
+    </application>
+
+</manifest>

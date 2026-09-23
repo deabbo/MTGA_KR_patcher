@@ -455,9 +455,9 @@ def run_localization_patch(log_callback):
     # 2. 카드 오역 수정
     patch_card_text(log_callback, "https://docs.google.com/uc?export=download&id=1pSF_YCV0NPuy240Rtt0bzOmr1GyE5HMd&confirm=t")
 
-    patch_no_translation_needed(log_callback)
     patch_sneak_keyword(log_callback)
     patch_vanishing_keyword(log_callback)
+    patch_no_translation_needed(log_callback)
     log_callback("=== 한글 오역 패치 완료 ===")
 
 def patch_vanishing_keyword(log_callback):
@@ -641,7 +641,7 @@ def patch_no_translation_needed(log_callback):
         if conn: conn.close()
 
 def patch_sneak_keyword(log_callback):
-    log_callback("  - '기습' -> '암습' 키워드 패치 시작...")
+    log_callback("  - '기습' -> '잠행' 키워드 패치 시작...")
     db_files = glob.glob(os.path.join(application_path, 'Raw_CardDatabase_*.mtga'))
     if not db_files:
         log_callback("    - 카드 데이터베이스를 찾을 수 없어 건너뜁니다.")
@@ -654,7 +654,7 @@ def patch_sneak_keyword(log_callback):
         cursor = conn.cursor()
 
         # 1. 394 관련 Ability 조회 (Id와 TextId)
-        cursor.execute("SELECT Id, TextId FROM Abilities WHERE Id = 394 OR BaseId = 394 OR ReferencedAbilityIds = 394")
+        cursor.execute("SELECT Id, TextId FROM Abilities WHERE Id = 394 OR BaseId = 394 OR ReferencedAbilityIds LIKE '%394%'")
         ability_rows = cursor.fetchall()
         
         

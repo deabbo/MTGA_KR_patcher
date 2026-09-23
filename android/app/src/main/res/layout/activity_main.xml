@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <Button
+        android:id="@+id/helpButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="8dp"
+        android:text="도움말 (처음 쓰시나요?)" />
+
+    <Button
+        android:id="@+id/connectionButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="8dp"
+        android:text="연결 방식 설정" />
+
+    <Button
+        android:id="@+id/shizukuDownloadButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="8dp"
+        android:text="Shizuku 앱 설치/열기 (Play 스토어)"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/statusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Shizuku 권한 확인 중..."
+        android:textSize="14sp"
+        android:paddingBottom="12dp" />
+
+    <CheckBox
+        android:id="@+id/mistranslationCheck"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="한글 오역 패치"
+        android:checked="true" />
+
+    <CheckBox
+        android:id="@+id/englishNamesOnlyCheck"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="카드이름만 영어로 (고인물용)" />
+
+    <CheckBox
+        android:id="@+id/removePatchCheck"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="패치 제거" />
+
+    <Button
+        android:id="@+id/runButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="오역 패치 시작" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="12dp">
+
+        <TextView
+            android:id="@+id/logText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:textSize="12sp"
+            android:text="" />
+    </ScrollView>
+
+</LinearLayout>
