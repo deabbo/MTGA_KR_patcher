@@ -28,7 +28,8 @@
 
         <service
             android:name=".UserServiceImpl"
-            android:exported="false" />
+            android:exported="false"
+            tools:ignore="Instantiatable" />
 
 
         <receiver

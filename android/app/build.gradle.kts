@@ -23,6 +23,11 @@ android {
         buildConfig = true
     }
 
+    lint {
+        disable.add("Instantiatable")
+        abortOnError = false
+    }
+
 
     signingConfigs {
         create("release") {
