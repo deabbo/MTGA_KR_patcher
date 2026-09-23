@@ -206,3 +206,4 @@ marimo/_lsp/
 __marimo__/
 runtime/ 
 apk_test.ipynb
+mtga_KR_patcher.spec

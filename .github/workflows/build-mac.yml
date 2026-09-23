@@ -28,8 +28,7 @@ jobs:
 
     - name: Build with PyInstaller
       run: |
-        # ※ mtga_KR_patcher.py 의 위치가 하위 폴더에 있다면 경로를 수정해주세요 (예: app/mtga_KR_patcher.py)
-        pyinstaller --noconfirm --windowed --target-arch universal2 app/mtga_KR_patcher.py
+        pyinstaller --noconfirm --windowed --target-arch universal2 --icon=app/logo.png app/mtga_KR_patcher.py
 
     - name: Zip the Application
       run: |
